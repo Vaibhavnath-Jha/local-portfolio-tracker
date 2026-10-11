@@ -1,0 +1,15 @@
+# Keep the image to just the app: no repo history, caches, or personal data
+.git
+.gitignore
+.dockerignore
+.claude
+.mypy_cache
+__pycache__
+*.pyc
+import/
+build/
+dist/
+data/
+portfolio.json
+Dockerfile
+docker-compose.yml
