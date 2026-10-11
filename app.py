@@ -4,20 +4,41 @@ import os
 import csv
 import io
 import re
+import math
+import copy
+import tempfile
+import threading
+import functools
 import subprocess
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 import requests as req
 import pdfplumber
 from flask import Flask, render_template, jsonify, request
+from werkzeug.exceptions import HTTPException
 
 app = Flask(__name__)
-PORTFOLIO_FILE = os.path.join(os.path.dirname(__file__), "portfolio.json")
+PORTFOLIO_FILE = os.environ.get("PORTFOLIO_FILE") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "data", "portfolio.json"
+)
+
+MARKET_TYPES = ("stock", "etf", "gold_etf", "mutual_fund", "crypto")
+INVESTMENT_TYPES = MARKET_TYPES + ("pf", "fd")
+IDENTIFIER_FIELDS = {
+    "stock": ("ticker", "Ticker"),
+    "etf": ("ticker", "Ticker"),
+    "gold_etf": ("ticker", "Ticker"),
+    "mutual_fund": ("scheme_code", "Scheme code"),
+    "crypto": ("coin_id", "Coin ID"),
+}
+COMPOUNDING_PERIODS = {"monthly": 12, "quarterly": 4, "half_yearly": 2, "yearly": 1}
 
 # In-memory price cache
 _price_cache = {}
 _historical_cache = {}
 _usd_inr_rate = None
+
+_portfolio_lock = threading.RLock()
 
 
 def load_portfolio():
@@ -28,8 +49,155 @@ def load_portfolio():
 
 
 def save_portfolio(data):
-    with open(PORTFOLIO_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+    """Write to a temp file and atomically swap it in, so a crash mid-write can't corrupt the portfolio."""
+    directory = os.path.dirname(PORTFOLIO_FILE)
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".portfolio-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp_path, 0o644)
+        os.replace(tmp_path, PORTFOLIO_FILE)
+    except BaseException:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def locked(view):
+    """Hold the portfolio lock for the duration of a request that modifies portfolio.json."""
+    @functools.wraps(view)
+    def wrapper(*args, **kwargs):
+        with _portfolio_lock:
+            return view(*args, **kwargs)
+    return wrapper
+
+
+# --- Validation ---
+
+class ValidationError(ValueError):
+    pass
+
+
+def _number(value, label, minimum=None, positive=False):
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        raise ValidationError("{} must be a number".format(label))
+    if not math.isfinite(n):
+        raise ValidationError("{} must be a number".format(label))
+    if positive and n <= 0:
+        raise ValidationError("{} must be greater than 0".format(label))
+    if minimum is not None and n < minimum:
+        raise ValidationError("{} must be at least {}".format(label, minimum))
+    return n
+
+
+def _date(value, label):
+    try:
+        return datetime.strptime(value, "%Y-%m-%d")
+    except (TypeError, ValueError):
+        raise ValidationError("{} must be a date (YYYY-MM-DD)".format(label))
+
+
+def check_transaction(t):
+    try:
+        _date(t.get("date"), "Date")
+        _number(t.get("quantity"), "Quantity")
+        _number(t.get("buy_price"), "Price", minimum=0)
+    except ValidationError as e:
+        raise ValidationError("Transaction {}: {}".format(t.get("date") or t.get("id") or "", e))
+
+
+def check_contribution(c):
+    try:
+        _date(c.get("date"), "Date")
+        _number(c.get("amount"), "Amount", minimum=0)
+    except ValidationError as e:
+        raise ValidationError("Contribution {}: {}".format(c.get("date") or c.get("id") or "", e))
+
+
+def check_schedule(s):
+    _number(s.get("amount"), "Amount", positive=True)
+    day = _number(s.get("day", 1), "Day")
+    if day != int(day) or not 1 <= day <= 31:
+        raise ValidationError("Day must be a whole number from 1 to 31")
+    start = _date(s.get("start_date"), "Start date")
+    if s.get("end_date"):
+        if _date(s["end_date"], "End date") < start:
+            raise ValidationError("End date must be on or after the start date")
+    if s.get("buy_price") not in (None, ""):
+        _number(s["buy_price"], "Buy price", positive=True)
+
+
+def investment_problem(inv, strict=False):
+    """Return a description of what's wrong with an investment, or None if it's usable.
+
+    strict=True additionally requires a name and a non-empty identifier, for user input.
+    Stored data is checked non-strictly since imports can leave e.g. an unmatched MF scheme code empty."""
+    try:
+        inv_type = inv.get("type")
+        if inv_type not in INVESTMENT_TYPES:
+            raise ValidationError("Unknown investment type '{}'".format(inv_type))
+        if strict and not str(inv.get("name") or "").strip():
+            raise ValidationError("Name is required")
+
+        if inv_type == "fd":
+            _number(inv.get("principal"), "Principal", positive=True)
+            _number(inv.get("interest_rate"), "Interest rate", minimum=0)
+            start = _date(inv.get("start_date"), "Start date")
+            maturity = _date(inv.get("maturity_date"), "Maturity date")
+            if maturity < start:
+                raise ValidationError("Maturity date must be on or after the start date")
+            if inv.get("compounding", "quarterly") not in COMPOUNDING_PERIODS:
+                raise ValidationError("Unknown compounding '{}'".format(inv.get("compounding")))
+        elif inv_type == "pf":
+            _number(inv.get("interest_rate"), "Interest rate", minimum=0)
+            for c in inv.get("contributions", []):
+                check_contribution(c)
+        else:
+            field, label = IDENTIFIER_FIELDS[inv_type]
+            if field not in inv or (strict and not str(inv.get(field) or "").strip()):
+                raise ValidationError("{} is required".format(label))
+            for t in inv.get("transactions", []):
+                check_transaction(t)
+
+        if inv.get("schedule"):
+            check_schedule(inv["schedule"])
+    except ValidationError as e:
+        return str(e)
+    return None
+
+
+def valid_investments(portfolio):
+    """Investments that can be valued; broken entries are skipped instead of failing the whole request."""
+    return [inv for inv in portfolio.get("investments", []) if investment_problem(inv) is None]
+
+
+def json_body():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        raise ValidationError("Request body must be a JSON object")
+    return data
+
+
+@app.errorhandler(ValidationError)
+def handle_validation_error(e):
+    return jsonify({"status": "error", "message": str(e)}), 400
+
+
+@app.errorhandler(Exception)
+def handle_error(e):
+    if isinstance(e, HTTPException):
+        if not request.path.startswith("/api/"):
+            return e
+        return jsonify({"status": "error", "message": e.description}), e.code
+    app.logger.exception("Unhandled error on %s", request.path)
+    return jsonify({"status": "error", "message": "Server error: {}".format(e)}), 500
 
 
 def yahoo_fetch(url):
@@ -263,6 +431,7 @@ def get_inflation_data():
     return None
 
 
+@locked
 def auto_generate_scheduled():
     """Auto-generate pending recurring entries for all investments with schedules."""
     portfolio = load_portfolio()
@@ -271,7 +440,7 @@ def auto_generate_scheduled():
 
     for inv in investments:
         schedule = inv.get("schedule")
-        if not schedule:
+        if not schedule or investment_problem(inv):
             continue
 
         amount = float(schedule["amount"])
@@ -370,10 +539,27 @@ def get_portfolio():
     auto_generate_scheduled()
 
     portfolio = load_portfolio()
-    investments = portfolio.get("investments", [])
+    investments = valid_investments(portfolio)
     results = []
     total_value = 0
     total_invested = 0
+
+    # Broken entries are returned with an error so the UI can show them for fixing,
+    # but they're left out of every total
+    for inv in portfolio.get("investments", []):
+        problem = investment_problem(inv)
+        if problem:
+            results.append({
+                **inv,
+                "error": problem,
+                "current_value": 0,
+                "invested": 0,
+                "gain_loss": 0,
+                "gain_loss_pct": 0,
+                "xirr": None,
+                "current_price": None,
+                "total_quantity": 0,
+            })
 
     for inv in investments:
         item = {**inv}
@@ -491,16 +677,34 @@ def _find_existing(investments, inv_type, data):
     return None
 
 
+def _find_investment(portfolio, inv_id):
+    for inv in portfolio.get("investments", []):
+        if inv["id"] == inv_id:
+            return inv
+    return None
+
+
+def _not_found():
+    return jsonify({"status": "error", "message": "Investment not found"}), 404
+
+
 @app.route("/api/investment", methods=["POST"])
+@locked
 def add_investment():
-    data = request.json
+    data = json_body()
     portfolio = load_portfolio()
-    inv_type = data["type"]
+    inv_type = data.get("type")
+    if inv_type not in INVESTMENT_TYPES:
+        raise ValidationError("Unknown investment type '{}'".format(inv_type))
+    if data.get("transaction"):
+        check_transaction(data["transaction"])
+    if data.get("contribution"):
+        check_contribution(data["contribution"])
 
     # Check if this investment already exists — if so, append transaction
     existing = _find_existing(portfolio.get("investments", []), inv_type, data)
 
-    if existing and inv_type in ("stock", "etf", "gold_etf", "mutual_fund", "crypto"):
+    if existing and inv_type in MARKET_TYPES:
         if data.get("transaction"):
             t = data["transaction"]
             t["id"] = str(uuid.uuid4())[:8]
@@ -513,17 +717,17 @@ def add_investment():
             c = data["contribution"]
             c["id"] = str(uuid.uuid4())[:8]
             existing.setdefault("contributions", []).append(c)
-        if data.get("interest_rate"):
-            existing["interest_rate"] = data["interest_rate"]
+        if data.get("interest_rate") is not None:
+            existing["interest_rate"] = _number(data["interest_rate"], "Interest rate", minimum=0)
         save_portfolio(portfolio)
         return jsonify({"status": "ok", "id": existing["id"]})
 
     # No existing match — create new investment
     inv_id = str(uuid.uuid4())[:8]
-    investment = {"id": inv_id, "type": inv_type, "name": data["name"], "category": data.get("category", inv_type)}
+    investment = {"id": inv_id, "type": inv_type, "name": data.get("name"), "category": data.get("category", inv_type)}
 
     if inv_type in ("stock", "etf", "gold_etf"):
-        investment["ticker"] = data["ticker"]
+        investment["ticker"] = data.get("ticker")
         investment["transactions"] = []
         if data.get("transaction"):
             t = data["transaction"]
@@ -531,7 +735,7 @@ def add_investment():
             investment["transactions"].append(t)
 
     elif inv_type == "mutual_fund":
-        investment["scheme_code"] = data["scheme_code"]
+        investment["scheme_code"] = data.get("scheme_code")
         investment["transactions"] = []
         if data.get("transaction"):
             t = data["transaction"]
@@ -539,7 +743,7 @@ def add_investment():
             investment["transactions"].append(t)
 
     elif inv_type == "crypto":
-        investment["coin_id"] = data["coin_id"]
+        investment["coin_id"] = data.get("coin_id")
         investment["transactions"] = []
         if data.get("transaction"):
             t = data["transaction"]
@@ -547,7 +751,7 @@ def add_investment():
             investment["transactions"].append(t)
 
     elif inv_type == "pf":
-        investment["interest_rate"] = data["interest_rate"]
+        investment["interest_rate"] = data.get("interest_rate")
         investment["contributions"] = []
         if data.get("contribution"):
             c = data["contribution"]
@@ -555,11 +759,15 @@ def add_investment():
             investment["contributions"].append(c)
 
     elif inv_type == "fd":
-        investment["principal"] = data["principal"]
-        investment["interest_rate"] = data["interest_rate"]
-        investment["start_date"] = data["start_date"]
-        investment["maturity_date"] = data["maturity_date"]
+        investment["principal"] = data.get("principal")
+        investment["interest_rate"] = data.get("interest_rate")
+        investment["start_date"] = data.get("start_date")
+        investment["maturity_date"] = data.get("maturity_date")
         investment["compounding"] = data.get("compounding", "quarterly")
+
+    problem = investment_problem(investment, strict=True)
+    if problem:
+        raise ValidationError(problem)
 
     portfolio["investments"].append(investment)
     save_portfolio(portfolio)
@@ -567,6 +775,7 @@ def add_investment():
 
 
 @app.route("/api/investment/<inv_id>", methods=["DELETE"])
+@locked
 def delete_investment(inv_id):
     portfolio = load_portfolio()
     portfolio["investments"] = [i for i in portfolio["investments"] if i["id"] != inv_id]
@@ -576,98 +785,113 @@ def delete_investment(inv_id):
 
 
 @app.route("/api/investment/<inv_id>", methods=["PUT"])
+@locked
 def edit_investment(inv_id):
-    data = request.json
+    data = json_body()
     portfolio = load_portfolio()
-    for inv in portfolio["investments"]:
-        if inv["id"] == inv_id:
-            inv["name"] = data.get("name", inv["name"])
+    original = _find_investment(portfolio, inv_id)
+    if not original:
+        return _not_found()
 
-            # Handle type change
-            new_type = data.get("type")
-            if new_type and new_type != inv["type"]:
-                inv["type"] = new_type
-                inv["category"] = data.get("category", new_type)
+    # Apply the edit to a copy and only keep it if the result is valid
+    inv = copy.deepcopy(original)
+    inv["name"] = data.get("name", inv.get("name"))
 
-            inv_type = inv["type"]
+    # Handle type change
+    new_type = data.get("type")
+    if new_type and new_type != inv["type"]:
+        inv["type"] = new_type
+        inv["category"] = data.get("category", new_type)
 
-            # Update type-specific fields
-            if inv_type in ("stock", "etf", "gold_etf"):
-                if data.get("ticker"):
-                    inv["ticker"] = data["ticker"]
-                inv.setdefault("transactions", [])
-            elif inv_type == "mutual_fund":
-                if data.get("scheme_code"):
-                    inv["scheme_code"] = data["scheme_code"]
-                inv.setdefault("transactions", [])
-            elif inv_type == "crypto":
-                if data.get("coin_id"):
-                    inv["coin_id"] = data["coin_id"]
-                inv.setdefault("transactions", [])
-            elif inv_type == "pf":
-                if data.get("interest_rate") is not None:
-                    inv["interest_rate"] = data["interest_rate"]
-                inv.setdefault("contributions", [])
-            elif inv_type == "fd":
-                for key in ("principal", "interest_rate", "start_date", "maturity_date", "compounding"):
-                    if data.get(key) is not None:
-                        inv[key] = data[key]
-            break
+    inv_type = inv["type"]
+
+    # Update type-specific fields
+    if inv_type in ("stock", "etf", "gold_etf"):
+        if data.get("ticker"):
+            inv["ticker"] = data["ticker"]
+        inv.setdefault("transactions", [])
+    elif inv_type == "mutual_fund":
+        if data.get("scheme_code"):
+            inv["scheme_code"] = data["scheme_code"]
+        inv.setdefault("transactions", [])
+    elif inv_type == "crypto":
+        if data.get("coin_id"):
+            inv["coin_id"] = data["coin_id"]
+        inv.setdefault("transactions", [])
+    elif inv_type == "pf":
+        if "interest_rate" in data:
+            inv["interest_rate"] = data["interest_rate"]
+        inv.setdefault("contributions", [])
+    elif inv_type == "fd":
+        for key in ("principal", "interest_rate", "start_date", "maturity_date", "compounding"):
+            if key in data:
+                inv[key] = data[key]
+
+    if not str(inv.get("name") or "").strip():
+        raise ValidationError("Name is required")
+    problem = investment_problem(inv)
+    if problem:
+        raise ValidationError(problem)
+
+    original.clear()
+    original.update(inv)
     save_portfolio(portfolio)
     _price_cache.pop(inv_id, None)
     return jsonify({"status": "ok"})
 
 
 @app.route("/api/investment/<inv_id>/transaction", methods=["POST"])
+@locked
 def add_transaction(inv_id):
-    data = request.json
+    data = json_body()
     portfolio = load_portfolio()
-    for inv in portfolio["investments"]:
-        if inv["id"] == inv_id:
-            t = {**data, "id": str(uuid.uuid4())[:8]}
-            if inv["type"] == "pf":
-                inv.setdefault("contributions", []).append(t)
-            else:
-                inv.setdefault("transactions", []).append(t)
-            break
+    inv = _find_investment(portfolio, inv_id)
+    if not inv:
+        return _not_found()
+    t = {**data, "id": str(uuid.uuid4())[:8]}
+    if inv["type"] == "pf":
+        check_contribution(t)
+        inv.setdefault("contributions", []).append(t)
+    else:
+        check_transaction(t)
+        inv.setdefault("transactions", []).append(t)
     save_portfolio(portfolio)
     return jsonify({"status": "ok"})
 
 
 @app.route("/api/investment/<inv_id>/transaction/<txn_id>", methods=["DELETE"])
+@locked
 def delete_transaction(inv_id, txn_id):
     portfolio = load_portfolio()
-    for inv in portfolio["investments"]:
-        if inv["id"] == inv_id:
-            if inv["type"] == "pf":
-                inv["contributions"] = [c for c in inv.get("contributions", []) if c["id"] != txn_id]
-            else:
-                inv["transactions"] = [t for t in inv.get("transactions", []) if t["id"] != txn_id]
-            break
+    inv = _find_investment(portfolio, inv_id)
+    if not inv:
+        return _not_found()
+    if inv["type"] == "pf":
+        inv["contributions"] = [c for c in inv.get("contributions", []) if c.get("id") != txn_id]
+    else:
+        inv["transactions"] = [t for t in inv.get("transactions", []) if t.get("id") != txn_id]
     save_portfolio(portfolio)
     return jsonify({"status": "ok"})
 
 
 @app.route("/api/investment/<inv_id>/transaction/<txn_id>", methods=["PUT"])
+@locked
 def edit_transaction(inv_id, txn_id):
-    data = request.json
+    data = json_body()
     portfolio = load_portfolio()
-    for inv in portfolio["investments"]:
-        if inv["id"] == inv_id:
-            if inv["type"] == "pf":
-                for c in inv.get("contributions", []):
-                    if c["id"] == txn_id:
-                        c["date"] = data.get("date", c["date"])
-                        c["amount"] = data.get("amount", c["amount"])
-                        break
-            else:
-                for t in inv.get("transactions", []):
-                    if t["id"] == txn_id:
-                        t["date"] = data.get("date", t["date"])
-                        t["quantity"] = data.get("quantity", t["quantity"])
-                        t["buy_price"] = data.get("buy_price", t["buy_price"])
-                        break
-            break
+    inv = _find_investment(portfolio, inv_id)
+    if not inv:
+        return _not_found()
+    if inv["type"] == "pf":
+        fields, check, entries = ("date", "amount"), check_contribution, inv.get("contributions", [])
+    else:
+        fields, check, entries = ("date", "quantity", "buy_price"), check_transaction, inv.get("transactions", [])
+    entry = next((e for e in entries if e.get("id") == txn_id), None)
+    if not entry:
+        return jsonify({"status": "error", "message": "Transaction not found"}), 404
+    updated = {**entry, **{k: data[k] for k in fields if k in data}}
+    check(updated)
+    entry.update(updated)
     save_portfolio(portfolio)
     return jsonify({"status": "ok"})
 
@@ -694,7 +918,7 @@ def historical():
     use_benchmark = request.args.get("benchmark", "false") == "true"
 
     portfolio = load_portfolio()
-    investments = portfolio.get("investments", [])
+    investments = valid_investments(portfolio)
 
     if not investments:
         return jsonify({"dates": [], "values": [], "invested": []})
@@ -914,7 +1138,7 @@ def historical():
 def historical_allocation():
     """Return allocation breakdown by category at each date point."""
     portfolio = load_portfolio()
-    investments = portfolio.get("investments", [])
+    investments = valid_investments(portfolio)
 
     if not investments:
         return jsonify({"dates": [], "allocations": {}})
@@ -1113,6 +1337,7 @@ def classify_eq_symbol(symbol):
 
 
 @app.route("/api/import", methods=["POST"])
+@locked
 def import_csv():
     if "file" not in request.files:
         return jsonify({"status": "error", "message": "No file uploaded"}), 400
@@ -1268,6 +1493,7 @@ def import_csv():
 
 
 @app.route("/api/import/pf", methods=["POST"])
+@locked
 def import_pf():
     """Import PF contributions from EPFO passbook PDFs."""
     if "file" not in request.files:
@@ -1369,9 +1595,11 @@ def import_pf():
 
 
 @app.route("/api/investment/<inv_id>/schedule", methods=["POST"])
+@locked
 def set_schedule(inv_id):
     """Set up a recurring schedule for an investment (SIP or PF contributions)."""
-    data = request.json
+    data = json_body()
+    check_schedule(data)
     portfolio = load_portfolio()
     inv = None
     for i in portfolio.get("investments", []):
@@ -1394,6 +1622,7 @@ def set_schedule(inv_id):
 
 
 @app.route("/api/investment/<inv_id>/schedule", methods=["DELETE"])
+@locked
 def delete_schedule(inv_id):
     """Remove recurring schedule from an investment."""
     portfolio = load_portfolio()
@@ -1406,9 +1635,11 @@ def delete_schedule(inv_id):
 
 
 @app.route("/api/investment/<inv_id>/generate", methods=["POST"])
+@locked
 def generate_recurring(inv_id):
     """Generate recurring contributions/transactions from schedule or custom params."""
-    data = request.json
+    data = json_body()
+    check_schedule(data)
     portfolio = load_portfolio()
     inv = None
     for i in portfolio.get("investments", []):

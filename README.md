@@ -4,7 +4,7 @@ A local, self-hosted portfolio tracker for Indian investors that don't want onli
 
 Track stocks, mutual funds, commodities, crypto, Provident Fund contributions, and Fixed Deposits — all in one place with live prices and historical charts.
 
-![Python](https://img.shields.io/badge/Python-3.8+-blue) ![Flask](https://img.shields.io/badge/Flask-Backend-green)
+![Python](https://img.shields.io/badge/Python-3.9+-blue) ![Flask](https://img.shields.io/badge/Flask-Backend-green)
 
 ## Features
 
@@ -64,7 +64,7 @@ Track stocks, mutual funds, commodities, crypto, Provident Fund contributions, a
 
 ## Tech Stack
 
-- **Backend:** Python Flask with JSON file storage (`portfolio.json`)
+- **Backend:** Python Flask with JSON file storage (`data/portfolio.json`)
 - **Frontend:** Single-page HTML with vanilla JS, Chart.js, and Flatpickr
 - **APIs:**
   - Yahoo Finance v8 (stocks/ETFs — fetched via `curl` to avoid TLS blocking)
@@ -77,7 +77,7 @@ Track stocks, mutual funds, commodities, crypto, Provident Fund contributions, a
 ## Setup
 
 ### Prerequisites
-- Python 3.8+
+- Python 3.9+
 - `curl` (used for Yahoo Finance API calls)
 
 ### Installation
@@ -95,6 +95,14 @@ python3 app.py
 ```
 
 The app runs at `http://localhost:5050`.
+
+### Running with Docker
+
+```bash
+docker compose up -d --build
+```
+
+The app is served at `http://127.0.0.1:5050` (only reachable from your machine). Portfolio data lives in `./data/portfolio.json` on the host, which is shared with non-Docker runs.
 
 ### Importing Data
 
@@ -119,7 +127,7 @@ The app runs at `http://localhost:5050`.
 
 ## Data Storage
 
-All portfolio data is stored locally in `portfolio.json`. No data is sent to any server — API calls are only made to fetch live/historical prices.
+All portfolio data is stored locally in `data/portfolio.json` (override with the `PORTFOLIO_FILE` environment variable). No data is sent to any server — API calls are only made to fetch live/historical prices.
 
 ## Future Plans
 

@@ -7,8 +7,6 @@ services:
     ports:
       - "127.0.0.1:5050:5050" # Change the first 5050 to your preferred external port if needed.
     environment:
-      - FLASK_HOST=0.0.0.0
-      - FLASK_DEBUG=0
       - TZ=Asia/Kolkata # So "today" matches Indian market dates
     volumes:
       # Mount the data directory (not the file itself) so the portfolio survives restarts,

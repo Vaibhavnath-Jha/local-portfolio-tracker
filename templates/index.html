@@ -589,31 +589,72 @@ function computeXirrJS(flows) {
   return null;
 }
 
+function toNumber(val) {
+  const n = Number(val);
+  return isFinite(n) ? n : 0;
+}
+
 function fmt(val) {
+  val = toNumber(val);
   if (currency === 'USD') val = val / usdRate;
   const sym = currency === 'INR' ? '\u20B9' : '$';
   return sym + val.toLocaleString('en-IN', { maximumFractionDigits: 0 });
 }
 
 function fmtDetailed(val) {
+  val = toNumber(val);
   if (currency === 'USD') val = val / usdRate;
   const sym = currency === 'INR' ? '\u20B9' : '$';
   return sym + val.toLocaleString('en-IN', { maximumFractionDigits: 2 });
 }
 
-async function setCurrency(c) {
-  currency = c;
-  if (c === 'USD') {
-    const resp = await fetch('/api/exchange-rate');
-    const data = await resp.json();
-    usdRate = data.usd_inr;
+// Escape a value for use as HTML text or inside a quoted attribute
+function esc(val) {
+  return String(val ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
+}
+
+// Encode a value as a JS string literal for an inline onclick="fn(...)" attribute
+function jsArg(val) {
+  return esc(JSON.stringify(String(val ?? '')));
+}
+
+// fetch wrapper that throws with the server's message on any failure
+async function api(url, options) {
+  const resp = await fetch(url, options);
+  let data = null;
+  try { data = await resp.json(); } catch (e) { /* non-JSON body */ }
+  if (!resp.ok || (data && data.status === 'error')) {
+    throw new Error((data && data.message) || ('Request failed (HTTP ' + resp.status + ')'));
   }
+  return data;
+}
+
+function sendJSON(url, method, body) {
+  return api(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+}
+
+async function setCurrency(c) {
+  if (c === 'USD') {
+    try {
+      const data = await api('/api/exchange-rate');
+      usdRate = data.usd_inr;
+    } catch (e) {
+      alert('Could not fetch the USD exchange rate: ' + e.message);
+      document.querySelector(`input[name="currency"][value="${currency}"]`).checked = true;
+      return;
+    }
+  }
+  currency = c;
   renderPortfolio();
 }
 
 async function loadPortfolio() {
-  const resp = await fetch('/api/portfolio');
-  portfolioData = await resp.json();
+  try {
+    portfolioData = await api('/api/portfolio');
+  } catch (e) {
+    alert('Could not load portfolio: ' + e.message);
+    return;
+  }
   renderPortfolio();
   loadHistoricalAllocation();
 }
@@ -752,8 +793,7 @@ async function loadHistoricalAllocation() {
   if (_histAllocData || _histAllocLoading) return;
   _histAllocLoading = true;
   try {
-    const resp = await fetch('/api/historical-allocation');
-    _histAllocData = await resp.json();
+    _histAllocData = await api('/api/historical-allocation');
     const container = document.getElementById('timeSliderContainer');
     const slider = document.getElementById('timeSlider');
     if (_histAllocData.dates && _histAllocData.dates.length > 1) {
@@ -796,6 +836,8 @@ document.getElementById('timeSlider').addEventListener('input', function() {
 });
 
 function isCurrentInvestment(inv) {
+  // Keep broken entries visible so they can be fixed
+  if (inv.error) return true;
   if (inv.type === 'fd') {
     // FD is past if maturity date has passed
     return !inv.maturity_date || inv.maturity_date >= new Date().toISOString().slice(0, 10);
@@ -870,7 +912,9 @@ function renderTable(investments) {
     totGL += gl;
 
     // Collect cash flows for filtered XIRR
-    if (inv.type === 'fd') {
+    if (inv.error) {
+      // Broken entries are excluded from totals server-side too
+    } else if (inv.type === 'fd') {
       if (inv.current_value > 0) {
         totalXirrFlows.push([inv.start_date, -parseFloat(inv.principal)]);
         totalXirrFlows.push([today, inv.current_value]);
@@ -887,41 +931,43 @@ function renderTable(investments) {
     }
 
     const schedBadge = inv.schedule ? ' <span style="font-size:0.65rem;background:#22c55e;color:#000;padding:1px 5px;border-radius:3px;vertical-align:middle;">recurring</span>' : '';
-    html += `<tr class="expandable" onclick="toggleTxns('${inv.id}')">
-      <td><strong>${inv.name}</strong>${schedBadge}</td>
-      <td><span class="type-badge type-${inv.type}">${(CATEGORY_LABELS[inv.type]||inv.type)}</span></td>
-      <td>${qtyLabel}</td>
+    const errorBadge = inv.error ? ` <span title="${esc(inv.error)}" style="font-size:0.65rem;background:#ef4444;color:#fff;padding:1px 5px;border-radius:3px;vertical-align:middle;cursor:help;">invalid data</span>
+      <div class="negative" style="font-size:0.75rem;margin-top:2px;">${esc(inv.error)}</div>` : '';
+    html += `<tr class="expandable" onclick="toggleTxns(${jsArg(inv.id)})">
+      <td><strong>${esc(inv.name)}</strong>${schedBadge}${errorBadge}</td>
+      <td><span class="type-badge type-${esc(inv.type)}">${esc(CATEGORY_LABELS[inv.type]||inv.type)}</span></td>
+      <td>${esc(qtyLabel)}</td>
       <td>${fmtDetailed(inv.invested)}</td>
       <td>${fmtDetailed(inv.current_value)}</td>
       <td class="${glClass}">${fmtDetailed(gl)} (${glPct >= 0 ? '+' : ''}${glPct}%)</td>
       <td class="${xirrClass}">${xirrStr}</td>
       <td style="white-space:nowrap;text-align:right;">
-        ${inv.type !== 'fd' ? `<button class="btn btn-sm" onclick="event.stopPropagation();openTxnModal('${inv.id}','${inv.type}','${inv.name}')">+ Add</button>` : ''}
-        <button class="btn btn-sm" onclick="event.stopPropagation();openEditInvModal('${inv.id}')">Edit</button>
-        <button class="btn btn-sm btn-danger" onclick="event.stopPropagation();deleteInvestment('${inv.id}')">Del</button>
+        ${inv.type !== 'fd' ? `<button class="btn btn-sm" onclick="event.stopPropagation();openTxnModal(${jsArg(inv.id)},${jsArg(inv.type)},${jsArg(inv.name)})">+ Add</button>` : ''}
+        <button class="btn btn-sm" onclick="event.stopPropagation();openEditInvModal(${jsArg(inv.id)})">Edit</button>
+        <button class="btn btn-sm btn-danger" onclick="event.stopPropagation();deleteInvestment(${jsArg(inv.id)})">Del</button>
       </td>
     </tr>`;
 
     // Transaction sub-rows (newest first)
     if (inv.type === 'pf') {
-      for (const c of (inv.contributions || []).slice().sort((a,b) => b.date.localeCompare(a.date))) {
-        html += `<tr class="txn-row" data-parent="${inv.id}">
-          <td colspan="6">${c.date} &mdash; ${fmtDetailed(parseFloat(c.amount).toFixed(2))}</td>
+      for (const c of (inv.contributions || []).slice().sort((a,b) => String(b.date).localeCompare(String(a.date)))) {
+        html += `<tr class="txn-row" data-parent="${esc(inv.id)}">
+          <td colspan="6">${esc(c.date)} &mdash; ${esc(fmtDetailed(parseFloat(c.amount).toFixed(2)))}</td>
           <td></td>
           <td>
-            <button class="btn btn-sm" onclick="openEditTxnModal('${inv.id}','${c.id}','pf','${c.date}','','','${c.amount}')">Edit</button>
-            <button class="btn btn-sm btn-danger" onclick="deleteTxn('${inv.id}','${c.id}')">Del</button>
+            <button class="btn btn-sm" onclick="openEditTxnModal(${jsArg(inv.id)},${jsArg(c.id)},'pf',${jsArg(c.date)},'','',${jsArg(c.amount)})">Edit</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteTxn(${jsArg(inv.id)},${jsArg(c.id)})">Del</button>
           </td>
         </tr>`;
       }
     } else if (inv.type !== 'fd') {
-      for (const t of (inv.transactions || []).slice().sort((a,b) => b.date.localeCompare(a.date))) {
-        html += `<tr class="txn-row" data-parent="${inv.id}">
-          <td colspan="6">${t.date} &mdash; ${parseFloat(t.quantity).toFixed(2)} units @ ${fmtDetailed(t.buy_price)}</td>
+      for (const t of (inv.transactions || []).slice().sort((a,b) => String(b.date).localeCompare(String(a.date)))) {
+        html += `<tr class="txn-row" data-parent="${esc(inv.id)}">
+          <td colspan="6">${esc(t.date)} &mdash; ${esc(parseFloat(t.quantity).toFixed(2))} units @ ${esc(fmtDetailed(t.buy_price))}</td>
           <td></td>
           <td>
-            <button class="btn btn-sm" onclick="openEditTxnModal('${inv.id}','${t.id}','market','${t.date}','${t.quantity}','${t.buy_price}','')">Edit</button>
-            <button class="btn btn-sm btn-danger" onclick="deleteTxn('${inv.id}','${t.id}')">Del</button>
+            <button class="btn btn-sm" onclick="openEditTxnModal(${jsArg(inv.id)},${jsArg(t.id)},'market',${jsArg(t.date)},${jsArg(t.quantity)},${jsArg(t.buy_price)},'')">Edit</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteTxn(${jsArg(inv.id)},${jsArg(t.id)})">Del</button>
           </td>
         </tr>`;
       }
@@ -950,7 +996,7 @@ function renderTable(investments) {
 }
 
 function toggleTxns(invId) {
-  document.querySelectorAll(`.txn-row[data-parent="${invId}"]`).forEach(r => r.classList.toggle('show'));
+  document.querySelectorAll(`.txn-row[data-parent="${CSS.escape(invId)}"]`).forEach(r => r.classList.toggle('show'));
 }
 
 async function loadHistorical() {
@@ -959,8 +1005,7 @@ async function loadHistorical() {
   const inflation = document.getElementById('inflationToggle').checked;
   const benchmark = document.getElementById('benchmarkToggle').checked;
   try {
-    const resp = await fetch(`/api/historical?view=${histView}&inflation=${inflation}&benchmark=${benchmark}`);
-    const data = await resp.json();
+    const data = await api(`/api/historical?view=${histView}&inflation=${inflation}&benchmark=${benchmark}`);
     histDataCache = data;
     renderLineChart(filterByTimeRange(data));
   } catch(e) {
@@ -1211,12 +1256,24 @@ async function refreshPrices() {
   const btn = document.getElementById('refreshBtn');
   btn.innerHTML = '<span class="spinner"></span> Refreshing...';
   btn.disabled = true;
-  await fetch('/api/refresh', { method: 'POST' });
-  _histAllocData = null;
+  try {
+    await api('/api/refresh', { method: 'POST' });
+    _histAllocData = null;
+    await loadPortfolio();
+    await loadHistorical();
+  } catch (e) {
+    alert('Could not refresh prices: ' + e.message);
+  } finally {
+    btn.textContent = 'Refresh Prices';
+    btn.disabled = false;
+  }
+}
+
+// Reload everything after a successful change
+async function afterChange() {
+  try { await api('/api/refresh', { method: 'POST' }); } catch (e) { console.error(e); }
   await loadPortfolio();
-  await loadHistorical();
-  btn.textContent = 'Refresh Prices';
-  btn.disabled = false;
+  loadHistorical();
 }
 
 // --- Add Investment Modal ---
@@ -1262,11 +1319,10 @@ async function doSearch() {
   else url = `/api/search/stock?q=${encodeURIComponent(q)}`;
 
   try {
-    const resp = await fetch(url);
-    const results = await resp.json();
+    const results = await api(url);
     const container = document.getElementById('searchResults');
 
-    if (results.length === 0) {
+    if (!Array.isArray(results) || results.length === 0) {
       container.innerHTML = '<div style="color:var(--muted)">No results found</div>';
       container.style.display = 'block';
       return;
@@ -1275,18 +1331,18 @@ async function doSearch() {
     let html = '';
     if (t === 'mutual_fund') {
       for (const r of results) {
-        html += `<div onclick="selectMF('${r.schemeCode}', '${r.schemeName.replace(/'/g, "\\'")}')">
-          ${r.schemeName} <small>(${r.schemeCode})</small></div>`;
+        html += `<div onclick="selectMF(${jsArg(r.schemeCode)}, ${jsArg(r.schemeName)})">
+          ${esc(r.schemeName)} <small>(${esc(r.schemeCode)})</small></div>`;
       }
     } else if (t === 'crypto') {
       for (const r of results) {
-        html += `<div onclick="selectCrypto('${r.id}', '${r.name.replace(/'/g, "\\'")}')">
-          ${r.name} <small>(${r.symbol.toUpperCase()})</small></div>`;
+        html += `<div onclick="selectCrypto(${jsArg(r.id)}, ${jsArg(r.name)})">
+          ${esc(r.name)} <small>(${esc(String(r.symbol || '').toUpperCase())})</small></div>`;
       }
     } else {
       for (const r of results) {
-        html += `<div onclick="selectStock('${r.ticker}', '${r.name.replace(/'/g, "\\'")}')">
-          ${r.name} <small>(${r.ticker} - ${r.exchange})</small></div>`;
+        html += `<div onclick="selectStock(${jsArg(r.ticker)}, ${jsArg(r.name)})">
+          ${esc(r.name)} <small>(${esc(r.ticker)} - ${esc(r.exchange)})</small></div>`;
       }
     }
     container.innerHTML = html;
@@ -1359,11 +1415,14 @@ async function submitInvestment() {
     body.compounding = document.getElementById('fdCompounding').value;
   }
 
-  await fetch('/api/investment', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  try {
+    await sendJSON('/api/investment', 'POST', body);
+  } catch (e) {
+    alert('Could not add investment: ' + e.message);
+    return;
+  }
   closeModal();
-  await fetch('/api/refresh', { method: 'POST' });
-  await loadPortfolio();
-  loadHistorical();
+  await afterChange();
 }
 
 // --- Transaction Modal ---
@@ -1392,23 +1451,36 @@ async function submitTransaction() {
       buy_price: document.getElementById('txnAddPrice').value
     };
   }
-  await fetch(`/api/investment/${invId}/transaction`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  try {
+    await sendJSON(`/api/investment/${encodeURIComponent(invId)}/transaction`, 'POST', body);
+  } catch (e) {
+    alert('Could not add transaction: ' + e.message);
+    return;
+  }
   closeTxnModal();
-  await fetch('/api/refresh', { method: 'POST' });
-  await loadPortfolio();
-  loadHistorical();
+  await afterChange();
 }
 
 async function deleteInvestment(id) {
   if (!confirm('Delete this investment?')) return;
-  await fetch(`/api/investment/${id}`, { method: 'DELETE' });
+  try {
+    await api(`/api/investment/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  } catch (e) {
+    alert('Could not delete investment: ' + e.message);
+    return;
+  }
   await loadPortfolio();
   loadHistorical();
 }
 
 async function deleteTxn(invId, txnId) {
   if (!confirm('Delete this transaction?')) return;
-  await fetch(`/api/investment/${invId}/transaction/${txnId}`, { method: 'DELETE' });
+  try {
+    await api(`/api/investment/${encodeURIComponent(invId)}/transaction/${encodeURIComponent(txnId)}`, { method: 'DELETE' });
+  } catch (e) {
+    alert('Could not delete transaction: ' + e.message);
+    return;
+  }
   await loadPortfolio();
   loadHistorical();
 }
@@ -1454,13 +1526,14 @@ async function submitEditTransaction() {
       buy_price: document.getElementById('editPrice').value
     };
   }
-  await fetch('/api/investment/' + invId + '/transaction/' + txnId, {
-    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
-  });
+  try {
+    await sendJSON('/api/investment/' + encodeURIComponent(invId) + '/transaction/' + encodeURIComponent(txnId), 'PUT', body);
+  } catch (e) {
+    alert('Could not save transaction: ' + e.message);
+    return;
+  }
   closeEditTxnModal();
-  await fetch('/api/refresh', { method: 'POST' });
-  await loadPortfolio();
-  loadHistorical();
+  await afterChange();
 }
 
 // --- Edit Investment Modal ---
@@ -1532,13 +1605,14 @@ async function submitEditInvestment() {
     body.compounding = document.getElementById('editInvFdCompounding').value;
   }
 
-  await fetch('/api/investment/' + invId, {
-    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
-  });
+  try {
+    await sendJSON('/api/investment/' + encodeURIComponent(invId), 'PUT', body);
+  } catch (e) {
+    alert('Could not save investment: ' + e.message);
+    return;
+  }
   closeEditInvModal();
-  await fetch('/api/refresh', { method: 'POST' });
-  await loadPortfolio();
-  loadHistorical();
+  await afterChange();
 }
 
 // --- Import Modal ---
@@ -1656,14 +1730,14 @@ function renderScheduleList() {
     var sym = currency === 'INR' ? '\u20B9' : '$';
     var amt = currency === 'USD' ? (parseFloat(s.amount) / usdRate) : parseFloat(s.amount);
     html += '<tr>' +
-      '<td style="padding:4px 8px;">' + inv.name + '</td>' +
+      '<td style="padding:4px 8px;">' + esc(inv.name) + '</td>' +
       '<td style="padding:4px 8px;">' + sym + amt.toLocaleString('en-IN', {maximumFractionDigits:0}) + '/mo</td>' +
-      '<td style="padding:4px 8px;">' + s.day + '</td>' +
-      '<td style="padding:4px 8px;">' + s.start_date + '</td>' +
-      '<td style="padding:4px 8px;">' + (s.end_date || 'Ongoing') + '</td>' +
+      '<td style="padding:4px 8px;">' + esc(s.day) + '</td>' +
+      '<td style="padding:4px 8px;">' + esc(s.start_date) + '</td>' +
+      '<td style="padding:4px 8px;">' + esc(s.end_date || 'Ongoing') + '</td>' +
       '<td style="padding:4px 8px;">' +
-        '<button class="btn btn-sm" onclick="editSchedule(\'' + inv.id + '\')">Edit</button> ' +
-        '<button class="btn btn-sm btn-danger" onclick="deleteSchedule(\'' + inv.id + '\')">Del</button>' +
+        '<button class="btn btn-sm" onclick="editSchedule(' + jsArg(inv.id) + ')">Edit</button> ' +
+        '<button class="btn btn-sm btn-danger" onclick="deleteSchedule(' + jsArg(inv.id) + ')">Del</button>' +
       '</td></tr>';
   }
   html += '</tbody></table>';
@@ -1721,7 +1795,12 @@ function editSchedule(invId) {
 
 async function deleteSchedule(invId) {
   if (!confirm('Remove recurring schedule?')) return;
-  await fetch('/api/investment/' + invId + '/schedule', { method: 'DELETE' });
+  try {
+    await api('/api/investment/' + encodeURIComponent(invId) + '/schedule', { method: 'DELETE' });
+  } catch (e) {
+    alert('Could not remove schedule: ' + e.message);
+    return;
+  }
   await loadPortfolio();
   renderScheduleList();
 }
@@ -1752,9 +1831,7 @@ async function saveSchedule() {
     if (endDate) body.end_date = endDate;
     if (buyPrice) body.buy_price = parseFloat(buyPrice);
 
-    await fetch('/api/investment/' + invId + '/schedule', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
-    });
+    await sendJSON('/api/investment/' + encodeURIComponent(invId) + '/schedule', 'POST', body);
 
     status.style.color = 'var(--green)';
     status.textContent = 'Schedule saved! Entries will auto-generate each time you open the app.';
@@ -1796,18 +1873,9 @@ async function submitRecurring() {
     if (endDate) body.end_date = endDate;
     if (buyPrice) body.buy_price = parseFloat(buyPrice);
 
-    var resp = await fetch('/api/investment/' + invId + '/generate', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
-    });
-    var data = await resp.json();
-
-    if (data.status === 'ok') {
-      status.style.color = 'var(--green)';
-      status.textContent = data.message;
-    } else {
-      status.style.color = 'var(--red)';
-      status.textContent = data.message || 'Error generating entries';
-    }
+    var data = await sendJSON('/api/investment/' + encodeURIComponent(invId) + '/generate', 'POST', body);
+    status.style.color = 'var(--green)';
+    status.textContent = data.message;
   } catch(e) {
     status.style.color = 'var(--red)';
     status.textContent = 'Error: ' + e.message;
@@ -1822,7 +1890,8 @@ async function submitRecurring() {
 }
 
 function clearForm() {
-  document.querySelectorAll('.modal input[type="text"], .modal input[type="number"]').forEach(i => i.value = '');
+  // Restore each input's HTML default (e.g. PF name "EPF", rate 8.25) rather than blanking it
+  document.querySelectorAll('.modal input[type="text"], .modal input[type="number"]').forEach(i => i.value = i.defaultValue);
   document.querySelectorAll('.modal .datepicker').forEach(el => {
     if (el._flatpickr) el._flatpickr.clear();
   });
