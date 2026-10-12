@@ -6,6 +6,7 @@ import io
 import re
 import math
 import copy
+import secrets
 import tempfile
 import threading
 import functools
@@ -14,13 +15,20 @@ from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 import requests as req
 import pdfplumber
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, session, redirect, url_for
 from werkzeug.exceptions import HTTPException
+from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
+# Pre-accounts location of the single portfolio. It is handed to the first account that signs up.
 PORTFOLIO_FILE = os.environ.get("PORTFOLIO_FILE") or os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "data", "portfolio.json"
 )
+DATA_DIR = os.path.dirname(PORTFOLIO_FILE)
+USERS_FILE = os.path.join(DATA_DIR, "users.json")
+USERS_DIR = os.path.join(DATA_DIR, "users")
+SECRET_KEY_FILE = os.path.join(DATA_DIR, "secret_key")
+ALLOW_SIGNUP = os.environ.get("ALLOW_SIGNUP", "1") == "1"
 
 MARKET_TYPES = ("stock", "etf", "gold_etf", "mutual_fund", "crypto")
 INVESTMENT_TYPES = MARKET_TYPES + ("pf", "fd")
@@ -39,33 +47,44 @@ _historical_cache = {}
 _usd_inr_rate = None
 
 _portfolio_lock = threading.RLock()
+_users_lock = threading.Lock()
 
 
-def load_portfolio():
-    if not os.path.exists(PORTFOLIO_FILE):
-        return {"investments": []}
-    with open(PORTFOLIO_FILE, "r") as f:
-        return json.load(f)
-
-
-def save_portfolio(data):
-    """Write to a temp file and atomically swap it in, so a crash mid-write can't corrupt the portfolio."""
-    directory = os.path.dirname(PORTFOLIO_FILE)
+def write_json_atomic(path, data, mode=0o644):
+    """Write to a temp file and atomically swap it in, so a crash mid-write can't corrupt the file."""
+    directory = os.path.dirname(path)
     os.makedirs(directory, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".portfolio-", suffix=".tmp")
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".tmp-", suffix=".json")
     try:
         with os.fdopen(fd, "w") as f:
             json.dump(data, f, indent=2)
             f.flush()
             os.fsync(f.fileno())
-        os.chmod(tmp_path, 0o644)
-        os.replace(tmp_path, PORTFOLIO_FILE)
+        os.chmod(tmp_path, mode)
+        os.replace(tmp_path, path)
     except BaseException:
         try:
             os.remove(tmp_path)
         except OSError:
             pass
         raise
+
+
+def portfolio_file():
+    """The signed-in user's portfolio. Usernames are restricted to [a-z0-9_-], so they're safe as folder names."""
+    return os.path.join(USERS_DIR, session["user"], "portfolio.json")
+
+
+def load_portfolio():
+    path = portfolio_file()
+    if not os.path.exists(path):
+        return {"investments": []}
+    with open(path, "r") as f:
+        return json.load(f)
+
+
+def save_portfolio(data):
+    write_json_atomic(portfolio_file(), data)
 
 
 def locked(view):
@@ -75,6 +94,126 @@ def locked(view):
         with _portfolio_lock:
             return view(*args, **kwargs)
     return wrapper
+
+
+# --- Accounts ---
+
+USERNAME_RE = re.compile(r"^[a-z0-9_-]{3,32}$")
+
+
+def load_secret_key():
+    """Sessions are signed with this key; keeping it in data/ means logins survive restarts."""
+    if os.environ.get("SECRET_KEY"):
+        return os.environ["SECRET_KEY"]
+    if not os.path.exists(SECRET_KEY_FILE):
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(SECRET_KEY_FILE, "w") as f:
+            f.write(secrets.token_hex(32))
+        os.chmod(SECRET_KEY_FILE, 0o600)
+    with open(SECRET_KEY_FILE) as f:
+        return f.read().strip()
+
+
+app.secret_key = load_secret_key()
+app.config.update(
+    SESSION_COOKIE_SAMESITE="Lax",
+    # Set to 1 when the app is only reached over HTTPS (e.g. through Caddy), so the cookie is never sent in clear text
+    SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE") == "1",
+    PERMANENT_SESSION_LIFETIME=timedelta(days=30),
+)
+
+
+def load_users():
+    if not os.path.exists(USERS_FILE):
+        return {}
+    with open(USERS_FILE, "r") as f:
+        return json.load(f)
+
+
+def signup_allowed():
+    # The first account can always be created, otherwise ALLOW_SIGNUP=0 on a fresh install would lock everyone out
+    return ALLOW_SIGNUP or not load_users()
+
+
+def create_user(username, password, confirm):
+    if not USERNAME_RE.match(username):
+        raise ValidationError("Username must be 3-32 characters: lowercase letters, digits, - or _")
+    if not 8 <= len(password) <= 1024:
+        raise ValidationError("Password must be at least 8 characters")
+    if password != confirm:
+        raise ValidationError("Passwords don't match")
+    with _users_lock:
+        users = load_users()
+        if username in users:
+            raise ValidationError("That username is taken")
+        if not users and os.path.exists(PORTFOLIO_FILE):
+            # The first account takes over the portfolio from before accounts existed
+            with _portfolio_lock:
+                os.makedirs(os.path.join(USERS_DIR, username), exist_ok=True)
+                os.replace(PORTFOLIO_FILE, os.path.join(USERS_DIR, username, "portfolio.json"))
+        users[username] = {
+            "password_hash": generate_password_hash(password),
+            "created": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        write_json_atomic(USERS_FILE, users, mode=0o600)
+
+
+def start_session(username):
+    session.clear()
+    session.permanent = True
+    session["user"] = username
+
+
+@app.before_request
+def require_login():
+    if request.endpoint in ("login", "signup", "static"):
+        return None
+    if session.get("user") in load_users():
+        return None
+    session.clear()
+    if request.path.startswith("/api/"):
+        return jsonify({"status": "error", "message": "Not logged in"}), 401
+    return redirect(url_for("login"))
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "GET" and not load_users():
+        return redirect(url_for("signup"))
+    error = None
+    username = request.form.get("username", "").strip().lower()
+    if request.method == "POST":
+        user = load_users().get(username)
+        if user and check_password_hash(user["password_hash"], request.form.get("password", "")):
+            start_session(username)
+            return redirect(url_for("index"))
+        error = "Wrong username or password"
+    return render_template("login.html", mode="login", error=error, username=username,
+                           allow_signup=signup_allowed())
+
+
+@app.route("/signup", methods=["GET", "POST"])
+def signup():
+    if not signup_allowed():
+        return redirect(url_for("login"))
+    error = None
+    username = request.form.get("username", "").strip().lower()
+    if request.method == "POST":
+        try:
+            create_user(username, request.form.get("password", ""), request.form.get("confirm", ""))
+        except ValidationError as e:
+            error = str(e)
+        else:
+            start_session(username)
+            return redirect(url_for("index"))
+    return render_template("login.html", mode="signup", error=error, username=username,
+                           first_user=not load_users())
+
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 
 # --- Validation ---
@@ -530,7 +669,7 @@ def calculate_xirr(cash_flows):
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", username=session["user"])
 
 
 @app.route("/api/portfolio")

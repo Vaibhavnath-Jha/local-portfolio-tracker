@@ -102,7 +102,21 @@ The app runs at `http://localhost:5050`.
 docker compose up -d --build
 ```
 
-The app is served at `http://127.0.0.1:5050` (only reachable from your machine). Portfolio data lives in `./data/portfolio.json` on the host, which is shared with non-Docker runs.
+The app is served at `http://127.0.0.1:5050` (only reachable from your machine). Accounts and portfolios live in `./data/` on the host, which is shared with non-Docker runs.
+
+### Accounts
+
+The tracker asks you to log in. Anyone can create an account from the sign-up page, and each account has its own separate portfolio.
+
+The first account you create takes over the portfolio you already had in `data/portfolio.json`; later accounts start empty. Logins last 30 days, or until you click **Log out**.
+
+Optional environment variables:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `ALLOW_SIGNUP` | `1` | Set to `0` to close sign-ups once your accounts exist |
+| `SESSION_COOKIE_SECURE` | `0` | Set to `1` if you only open the app over HTTPS (e.g. through Caddy); logging in over plain `http://` then stops working |
+| `SECRET_KEY` | generated | Key that signs login cookies. By default one is generated into `data/secret_key`; changing it logs everyone out |
 
 ### Importing Data
 
@@ -127,7 +141,7 @@ The app is served at `http://127.0.0.1:5050` (only reachable from your machine).
 
 ## Data Storage
 
-All portfolio data is stored locally in `data/portfolio.json` (override with the `PORTFOLIO_FILE` environment variable). No data is sent to any server — API calls are only made to fetch live/historical prices.
+All data is stored locally in `data/`: each account's portfolio in `data/users/<username>/portfolio.json`, and accounts (with hashed passwords) in `data/users.json`. No data is sent to any server — API calls are only made to fetch live/historical prices.
 
 ## Future Plans
 

@@ -5,9 +5,10 @@ services:
     container_name: local-portfolio-tracker
     restart: unless-stopped
     ports:
-      - "127.0.0.1:5050:5050" # Change the first 5050 to your preferred external port if needed.
+      - "5050:5050" # Change the first 5050 to your preferred external port if needed.
     environment:
       - TZ=Asia/Kolkata # So "today" matches Indian market dates
+      - SESSION_COOKIE_SECURE=1
     volumes:
       # Mount the data directory (not the file itself) so the portfolio survives restarts,
       - ./data:/app/data

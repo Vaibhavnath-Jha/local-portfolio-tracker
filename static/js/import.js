@@ -47,6 +47,7 @@ async function submitImport() {
     }
     try {
       var resp = await fetch('/api/import/pf', { method: 'POST', body: formData });
+      checkLoggedIn(resp);
       var data = await resp.json();
       if (data.status === 'ok') {
         totalImported = data.imported;
@@ -62,6 +63,7 @@ async function submitImport() {
       formData.append('file', files[i]);
       try {
         var resp = await fetch('/api/import', { method: 'POST', body: formData });
+        checkLoggedIn(resp);
         var data = await resp.json();
         if (data.status === 'ok') {
           totalImported += data.imported;

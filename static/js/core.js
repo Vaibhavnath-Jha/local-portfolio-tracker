@@ -97,9 +97,18 @@ function jsArg(val) {
   return esc(JSON.stringify(String(val ?? '')));
 }
 
+// Send the user back to the login page once their session has expired
+function checkLoggedIn(resp) {
+  if (resp.status === 401) {
+    window.location.href = '/login';
+    throw new Error('Session expired, please log in again');
+  }
+}
+
 // fetch wrapper that throws with the server's message on any failure
 async function api(url, options) {
   const resp = await fetch(url, options);
+  checkLoggedIn(resp);
   let data = null;
   try { data = await resp.json(); } catch (e) { /* non-JSON body */ }
   if (!resp.ok || (data && data.status === 'error')) {
