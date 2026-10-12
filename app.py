@@ -543,6 +543,8 @@ def get_historical_prices(inv, start_date, end_date=None):
 def get_inflation_data():
     """Fetch India CPI data from World Bank API. Returns dict of year -> CPI index.
     Extrapolates missing recent years using last known year-over-year rate."""
+    if "_cpi_india" in _historical_cache:
+        return _historical_cache["_cpi_india"]
     try:
         resp = req.get(
             "https://api.worldbank.org/v2/country/IN/indicator/FP.CPI.TOTL?format=json&per_page=50&date=2000:2026",
@@ -564,10 +566,34 @@ def get_inflation_data():
                     yoy_rate = 1.05  # ~5% default India inflation
                 for y in range(latest + 1, current_year + 2):
                     cpi[y] = cpi[y - 1] * yoy_rate
-            return cpi
+                _historical_cache["_cpi_india"] = cpi
+                return cpi
     except Exception as e:
         print("Error fetching CPI data: {}".format(e))
     return None
+
+
+def make_inflation_adjuster(cpi_data, now):
+    """Return f(date_str) -> multiplier that converts rupees on that date into today's rupees.
+    Annual CPI is interpolated linearly by day of year."""
+    first, last = min(cpi_data), max(cpi_data)
+
+    def cpi_at(dt):
+        year = min(max(dt.year, first), last)
+        cpi_y = cpi_data[year]
+        cpi_next = cpi_data.get(year + 1, cpi_y)
+        frac = (dt.timetuple().tm_yday - 1) / 365.0 if dt.year == year else 0.0
+        return cpi_y + (cpi_next - cpi_y) * frac
+
+    now_cpi = cpi_at(now)
+    factors = {}
+
+    def adjust(date_str):
+        if date_str not in factors:
+            factors[date_str] = now_cpi / cpi_at(datetime.strptime(date_str, "%Y-%m-%d"))
+        return factors[date_str]
+
+    return adjust
 
 
 @locked
@@ -1098,10 +1124,14 @@ def historical():
     if date_points and date_points[-1] != end_date:
         date_points.append(end_date)
 
-    # Get inflation data if needed
-    cpi_data = None
+    # Inflation adjustment expresses everything in today's rupees: each point's value is scaled by
+    # its own date's factor, and each contribution by the factor of the date it was invested.
+    def adj(date_str):
+        return 1.0
     if use_inflation:
         cpi_data = get_inflation_data()
+        if cpi_data:
+            adj = make_inflation_adjuster(cpi_data, now)
 
     values = []
     invested_values = []
@@ -1135,11 +1165,12 @@ def historical():
                     fd_val = calculate_fd_value(inv, dp)
                     total += fd_val
                     if fd_val > 0:
-                        total_invested += float(inv["principal"])
+                        total_invested += float(inv["principal"]) * adj(inv["start_date"])
 
             elif inv_type == "pf":
                 total += calculate_pf_value(inv, dp)
-                total_invested += sum(float(c["amount"]) for c in inv.get("contributions", []) if c["date"] <= dp)
+                total_invested += sum(float(c["amount"]) * adj(c["date"])
+                                      for c in inv.get("contributions", []) if c["date"] <= dp)
 
             else:
                 transactions = inv.get("transactions", [])
@@ -1161,31 +1192,12 @@ def historical():
                 else:
                     active_txns = [t for t in transactions if t["date"] <= dp]
                     qty = sum(float(t["quantity"]) for t in active_txns)
-                    invested = sum(float(t["quantity"]) * float(t["buy_price"]) for t in active_txns)
+                    invested = sum(float(t["quantity"]) * float(t["buy_price"]) * adj(t["date"]) for t in active_txns)
                     total_invested += invested
 
                 total += price * qty
 
-        # Apply inflation adjustment (interpolate monthly within years)
-        if use_inflation and cpi_data:
-            dp_year = dp_dt.year
-            now_year = now.year
-            now_month = now.month
-            # Interpolate CPI for the date point
-            cpi_y = cpi_data.get(dp_year, cpi_data.get(min(cpi_data.keys(), key=lambda y: abs(y - dp_year))))
-            cpi_y_next = cpi_data.get(dp_year + 1, cpi_y * 1.05)
-            frac = (dp_dt.month - 1) / 12.0
-            dp_cpi = cpi_y + (cpi_y_next - cpi_y) * frac
-            # Interpolate CPI for now
-            now_cpi_y = cpi_data.get(now_year, cpi_data.get(max(cpi_data.keys())))
-            now_cpi_next = cpi_data.get(now_year + 1, now_cpi_y * 1.05)
-            now_frac = (now_month - 1) / 12.0
-            now_cpi = now_cpi_y + (now_cpi_next - now_cpi_y) * now_frac
-            if dp_cpi:
-                factor = now_cpi / dp_cpi
-                total = total * factor
-                total_invested = total_invested * factor
-
+        total *= adj(dp)
         values.append(round(total, 2))
         invested_values.append(round(total_invested, 2))
 
@@ -1265,7 +1277,7 @@ def historical():
                 cf_idx += 1
             nifty_price = get_nifty_price(dp)
             if nifty_price is not None and cumulative_units > 0:
-                benchmark_values.append(round(cumulative_units * nifty_price, 2))
+                benchmark_values.append(round(cumulative_units * nifty_price * adj(dp), 2))
             else:
                 benchmark_values.append(None)
         result["benchmark"] = benchmark_values
