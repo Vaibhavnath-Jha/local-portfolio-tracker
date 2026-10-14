@@ -1,150 +1,23 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Portfolio Tracker</title>
-<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+{% extends "base.html" %}
+{% set region = regions[page] %}
+{% set sym = currencies[region.currency] %}
+
+{% block title %}Portfolio Tracker · {{ region.name }}{% endblock %}
+
+{% block head %}
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/themes/dark.css">
 <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
-<style>
-  :root {
-    --bg: #0f1117; --surface: #1a1d27; --surface2: #252836;
-    --border: #2e3348; --text: #e4e4e7; --muted: #9ca3af;
-    --green: #22c55e; --red: #ef4444; --blue: #3b82f6;
-    --purple: #a855f7; --orange: #f97316; --cyan: #06b6d4;
-    --yellow: #eab308; --pink: #ec4899;
-  }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+{% endblock %}
 
-  .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
-  header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; flex-wrap: wrap; gap: 12px; }
-  header h1 { font-size: 1.5rem; font-weight: 700; }
-  .header-actions { display: flex; gap: 8px; align-items: center; }
-  .user-menu { display: flex; gap: 8px; align-items: center; margin-left: 8px; padding-left: 16px; border-left: 1px solid var(--border); font-size: 0.85rem; color: var(--muted); }
-
-  .btn { padding: 8px 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); cursor: pointer; font-size: 0.85rem; transition: all 0.2s; }
-  .btn:hover { background: var(--surface2); border-color: var(--blue); }
-  .btn-primary { background: var(--blue); border-color: var(--blue); }
-  .btn-primary:hover { opacity: 0.9; }
-  .btn-danger { border-color: var(--red); color: var(--red); }
-  .btn-danger:hover { background: var(--red); color: white; }
-  .btn-sm { padding: 4px 10px; font-size: 0.75rem; }
-
-  .summary-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
-  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
-  .card-label { font-size: 0.8rem; color: var(--muted); margin-bottom: 4px; }
-  .card-value { font-size: 1.6rem; font-weight: 700; }
-  .card-sub { font-size: 0.85rem; margin-top: 4px; }
-  .positive { color: var(--green); }
-  .negative { color: var(--red); }
-
-  .charts-grid { display: grid; grid-template-columns: 1fr 2fr; gap: 16px; margin-bottom: 24px; }
-  @media (max-width: 900px) { .charts-grid { grid-template-columns: 1fr; } }
-  .chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
-  .chart-card h3 { font-size: 0.95rem; margin-bottom: 12px; color: var(--muted); }
-  .chart-controls { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
-  .toggle-group { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-  .toggle-btn { padding: 6px 14px; background: var(--surface); color: var(--muted); border: none; cursor: pointer; font-size: 0.8rem; }
-  .toggle-btn.active { background: var(--blue); color: white; }
-
-  .investments-section h2 { font-size: 1.1rem; margin-bottom: 12px; }
-  .inv-table { width: 100%; border-collapse: collapse; }
-  .inv-table th { text-align: left; padding: 10px 12px; font-size: 0.75rem; color: var(--muted); text-transform: uppercase; border-bottom: 1px solid var(--border); }
-  .inv-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 0.85rem; }
-  .inv-table tr:hover { background: var(--surface2); }
-  .type-badge { padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; text-transform: uppercase; font-weight: 600; }
-  .type-stock { background: rgba(59,130,246,0.15); color: var(--blue); }
-  .type-etf { background: rgba(168,85,247,0.15); color: var(--purple); }
-  .type-gold_etf { background: rgba(234,179,8,0.15); color: var(--yellow); }
-  .type-mutual_fund { background: rgba(6,182,212,0.15); color: var(--cyan); }
-  .type-crypto { background: rgba(249,115,22,0.15); color: var(--orange); }
-  .type-pf { background: rgba(34,197,94,0.15); color: var(--green); }
-  .type-fd { background: rgba(236,72,153,0.15); color: var(--pink); }
-
-  .expandable { cursor: pointer; }
-  .txn-row { display: none; }
-  .txn-row.show { display: table-row; }
-  .txn-row td { padding-left: 40px; color: var(--muted); font-size: 0.8rem; background: var(--surface2); }
-
-  /* Modal */
-  .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); z-index: 100; justify-content: center; align-items: center; }
-  .modal-overlay.show { display: flex; }
-  .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 24px; width: 90%; max-width: 520px; max-height: 85vh; overflow-y: auto; }
-  .modal h2 { margin-bottom: 16px; font-size: 1.1rem; }
-  .form-group { margin-bottom: 14px; }
-  .form-group label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 4px; }
-  .form-group input, .form-group select { width: 100%; padding: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 0.9rem; }
-  .form-group input:focus, .form-group select:focus { outline: none; border-color: var(--blue); }
-  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .search-results { max-height: 150px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; margin-top: 4px; }
-  .search-results div { padding: 8px 12px; cursor: pointer; font-size: 0.85rem; border-bottom: 1px solid var(--border); }
-  .search-results div:hover { background: var(--surface2); }
-  .search-results div small { color: var(--muted); }
-  .form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
-
-  .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--blue); border-radius: 50%; animation: spin 0.6s linear infinite; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .loading-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(15,17,23,0.7); display: flex; align-items: center; justify-content: center; border-radius: 12px; }
-
-  .empty-state { text-align: center; padding: 40px; color: var(--muted); }
-  .currency-toggle { font-size: 0.85rem; color: var(--muted); }
-
-  /* Flatpickr overrides to match theme */
-  .flatpickr-calendar {
-    background: var(--surface) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 12px !important;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.4) !important;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
-  }
-  .flatpickr-months .flatpickr-month,
-  .flatpickr-current-month .flatpickr-monthDropdown-months { background: var(--surface) !important; color: var(--text) !important; }
-  .flatpickr-current-month input.cur-year { color: var(--text) !important; }
-  .flatpickr-months .flatpickr-prev-month, .flatpickr-months .flatpickr-next-month { fill: var(--muted) !important; color: var(--muted) !important; }
-  .flatpickr-months .flatpickr-prev-month:hover, .flatpickr-months .flatpickr-next-month:hover { fill: var(--text) !important; color: var(--text) !important; }
-  span.flatpickr-weekday { color: var(--muted) !important; background: var(--surface) !important; font-weight: 600; }
-  .flatpickr-day { color: var(--text) !important; border-radius: 6px !important; }
-  .flatpickr-day:hover { background: var(--surface2) !important; border-color: var(--border) !important; }
-  .flatpickr-day.selected { background: var(--blue) !important; border-color: var(--blue) !important; color: white !important; }
-  .flatpickr-day.today { border-color: var(--blue) !important; }
-  .flatpickr-day.prevMonthDay, .flatpickr-day.nextMonthDay { color: var(--border) !important; }
-  .flatpickr-day.disabled { color: var(--border) !important; }
-  .flatpickr-innerContainer { border-bottom: none !important; }
-  .flatpickr-rContainer { padding: 4px !important; }
-  .flatpickr-current-month { display: flex !important; align-items: center !important; gap: 4px !important; }
-  .flatpickr-current-month .flatpickr-monthDropdown-months,
-  .numInputWrapper { background: var(--bg) !important; border: 1px solid var(--border) !important; border-radius: 6px !important; color: var(--text) !important; padding: 2px 4px !important; }
-  .flatpickr-current-month .flatpickr-monthDropdown-months option { background: var(--surface) !important; color: var(--text) !important; }
-  .numInputWrapper input { color: var(--text) !important; }
-  .numInputWrapper span { border-color: var(--muted) !important; }
-  .numInputWrapper span:hover { background: var(--surface2) !important; }
-  .flatpickr-current-month input.cur-year { font-size: 0.9rem !important; }
-</style>
-</head>
-<body>
-<div class="container">
-  <header>
-    <h1>Portfolio Tracker</h1>
-    <div class="header-actions">
-      <span class="currency-toggle">
-        <label><input type="radio" name="currency" value="INR" checked onchange="setCurrency('INR')"> INR</label>
-        <label><input type="radio" name="currency" value="USD" onchange="setCurrency('USD')"> USD</label>
-      </span>
+{% block actions %}
       <button class="btn" onclick="refreshPrices()" id="refreshBtn">Refresh Prices</button>
-      <button class="btn" onclick="openImportModal()">Import</button>
+      {% if region.imports %}<button class="btn" onclick="openImportModal()">Import</button>{% endif %}
       <button class="btn" onclick="openRecurringModal()">Recurring</button>
       <button class="btn btn-primary" onclick="openAddModal()">+ Add Investment</button>
-      <form class="user-menu" method="post" action="{{ url_for('logout') }}">
-        <span>{{ username }}</span>
-        <button class="btn" type="submit">Log out</button>
-      </form>
-    </div>
-  </header>
+{% endblock %}
 
+{% block content %}
   <div class="summary-cards" id="summaryCards">
     <div class="card"><div class="card-label">Total Value</div><div class="card-value" id="totalValue">--</div></div>
     <div class="card"><div class="card-label">Total Invested</div><div class="card-value" id="totalInvested">--</div></div>
@@ -184,7 +57,7 @@
             <input type="checkbox" id="investedToggle" checked onchange="loadHistorical()"> Amount Invested
           </label>
           <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;color:var(--muted);">
-            <input type="checkbox" id="benchmarkToggle" checked onchange="loadHistorical()"> Nifty 50
+            <input type="checkbox" id="benchmarkToggle" checked onchange="loadHistorical()"> {{ region.benchmark.label }}
           </label>
           <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;color:var(--muted);">
             <input type="checkbox" id="inflationToggle" onchange="loadHistorical()"> Inflation Adjusted
@@ -238,8 +111,9 @@
       <div class="empty-state" id="emptyState" style="display:none;">No investments yet. Click "+ Add Investment" to get started.</div>
     </div>
   </div>
-</div>
+{% endblock %}
 
+{% block modals %}
 <!-- Add Investment Modal -->
 <div class="modal-overlay" id="addModal">
   <div class="modal">
@@ -247,13 +121,8 @@
     <div class="form-group">
       <label>Investment Type</label>
       <select id="invType" onchange="onTypeChange()">
-        <option value="stock">Stock (NSE/BSE)</option>
-        <option value="etf">ETF</option>
-        <option value="gold_etf">Gold ETF</option>
-        <option value="mutual_fund">Mutual Fund</option>
-        <option value="crypto">Cryptocurrency</option>
-        <option value="pf">Provident Fund (PF)</option>
-        <option value="fd">Fixed Deposit (FD)</option>
+        {% for value, label in region.types.items() %}<option value="{{ value }}">{{ label }}</option>
+        {% endfor %}
       </select>
     </div>
 
@@ -271,7 +140,7 @@
       <input type="hidden" id="assetTicker">
       <div class="form-row">
         <div class="form-group"><label>Quantity</label><input type="number" id="txnQty" step="any" placeholder="0"></div>
-        <div class="form-group"><label>Buy Price (per unit)</label><input type="number" id="txnPrice" step="any" placeholder="0"></div>
+        <div class="form-group"><label>Buy Price per unit ({{ sym }})</label><input type="number" id="txnPrice" step="any" placeholder="0"></div>
       </div>
       <div class="form-group"><label>Date</label><input type="text" id="txnDate" class="datepicker" placeholder="Select date"></div>
     </div>
@@ -281,7 +150,7 @@
       <div class="form-group"><label>Name</label><input type="text" id="pfName" value="EPF" placeholder="EPF"></div>
       <div class="form-group"><label>Interest Rate (% p.a.)</label><input type="number" id="pfRate" value="8.25" step="0.01"></div>
       <div class="form-row">
-        <div class="form-group"><label>Contribution Amount</label><input type="number" id="pfAmount" step="any" placeholder="Monthly amount"></div>
+        <div class="form-group"><label>Contribution Amount ({{ sym }})</label><input type="number" id="pfAmount" step="any" placeholder="Monthly amount"></div>
         <div class="form-group"><label>Date</label><input type="text" id="pfDate" class="datepicker" placeholder="Select date"></div>
       </div>
     </div>
@@ -289,7 +158,7 @@
     <!-- FD fields -->
     <div id="fdFields" style="display:none;">
       <div class="form-group"><label>Name</label><input type="text" id="fdName" placeholder="e.g. SBI FD"></div>
-      <div class="form-group"><label>Principal</label><input type="number" id="fdPrincipal" step="any" placeholder="Amount"></div>
+      <div class="form-group"><label>Principal ({{ sym }})</label><input type="number" id="fdPrincipal" step="any" placeholder="Amount"></div>
       <div class="form-group"><label>Interest Rate (% p.a.)</label><input type="number" id="fdRate" step="0.01" placeholder="7.1"></div>
       <div class="form-row">
         <div class="form-group"><label>Start Date</label><input type="text" id="fdStart" class="datepicker" placeholder="Select date"></div>
@@ -322,13 +191,13 @@
     <div id="txnMarketFields">
       <div class="form-row">
         <div class="form-group"><label>Quantity</label><input type="number" id="txnAddQty" step="any"></div>
-        <div class="form-group"><label>Buy Price (per unit)</label><input type="number" id="txnAddPrice" step="any"></div>
+        <div class="form-group"><label>Buy Price per unit ({{ sym }})</label><input type="number" id="txnAddPrice" step="any"></div>
       </div>
       <div class="form-group"><label>Date</label><input type="text" id="txnAddDate" class="datepicker" placeholder="Select date"></div>
     </div>
     <div id="txnPfFields" style="display:none;">
       <div class="form-row">
-        <div class="form-group"><label>Contribution Amount</label><input type="number" id="txnPfAmount" step="any"></div>
+        <div class="form-group"><label>Contribution Amount ({{ sym }})</label><input type="number" id="txnPfAmount" step="any"></div>
         <div class="form-group"><label>Date</label><input type="text" id="txnPfDate" class="datepicker" placeholder="Select date"></div>
       </div>
     </div>
@@ -349,13 +218,13 @@
     <div id="editMarketFields">
       <div class="form-row">
         <div class="form-group"><label>Quantity</label><input type="number" id="editQty" step="any"></div>
-        <div class="form-group"><label>Buy Price (per unit)</label><input type="number" id="editPrice" step="any"></div>
+        <div class="form-group"><label>Buy Price per unit ({{ sym }})</label><input type="number" id="editPrice" step="any"></div>
       </div>
       <div class="form-group"><label>Date</label><input type="text" id="editDate" class="datepicker" placeholder="Select date"></div>
     </div>
     <div id="editPfFields" style="display:none;">
       <div class="form-row">
-        <div class="form-group"><label>Contribution Amount</label><input type="number" id="editPfAmount" step="any"></div>
+        <div class="form-group"><label>Contribution Amount ({{ sym }})</label><input type="number" id="editPfAmount" step="any"></div>
         <div class="form-group"><label>Date</label><input type="text" id="editPfDate" class="datepicker" placeholder="Select date"></div>
       </div>
     </div>
@@ -375,13 +244,8 @@
     <div class="form-group">
       <label>Investment Type</label>
       <select id="editInvType" onchange="onEditInvTypeChange()">
-        <option value="stock">Stock (NSE/BSE)</option>
-        <option value="etf">ETF</option>
-        <option value="gold_etf">Gold ETF</option>
-        <option value="mutual_fund">Mutual Fund</option>
-        <option value="crypto">Cryptocurrency</option>
-        <option value="pf">Provident Fund (PF)</option>
-        <option value="fd">Fixed Deposit (FD)</option>
+        {% for value, label in region.types.items() %}<option value="{{ value }}">{{ label }}</option>
+        {% endfor %}
       </select>
     </div>
 
@@ -425,7 +289,7 @@
     <!-- FD fields -->
     <div id="editInvFdFields" style="display:none;">
       <div class="form-group">
-        <label>Principal</label>
+        <label>Principal ({{ sym }})</label>
         <input type="number" id="editInvFdPrincipal" step="any">
       </div>
       <div class="form-group">
@@ -454,6 +318,7 @@
   </div>
 </div>
 
+{% if region.imports %}
 <!-- Import Modal -->
 <div class="modal-overlay" id="importModal">
   <div class="modal">
@@ -479,6 +344,7 @@
     </div>
   </div>
 </div>
+{% endif %}
 
 <!-- Recurring / Bulk Add Modal -->
 <div class="modal-overlay" id="recurringModal">
@@ -498,7 +364,7 @@
       <select id="recurInvestment" onchange="onRecurInvestmentChange()"></select>
     </div>
     <div class="form-group">
-      <label>Amount per month</label>
+      <label>Amount per month ({{ sym }})</label>
       <input type="number" id="recurAmount" step="0.01">
     </div>
     <div class="form-group" id="recurBuyPriceGroup" style="display:none;">
@@ -525,15 +391,16 @@
     </div>
   </div>
 </div>
+{% endblock %}
 
+{% block scripts %}
 <script src="{{ url_for('static', filename='js/core.js') }}"></script>
 <script src="{{ url_for('static', filename='js/portfolio.js') }}"></script>
 <script src="{{ url_for('static', filename='js/allocation-chart.js') }}"></script>
 <script src="{{ url_for('static', filename='js/investments-table.js') }}"></script>
 <script src="{{ url_for('static', filename='js/history-chart.js') }}"></script>
 <script src="{{ url_for('static', filename='js/investment-modals.js') }}"></script>
-<script src="{{ url_for('static', filename='js/import.js') }}"></script>
+{% if region.imports %}<script src="{{ url_for('static', filename='js/import.js') }}"></script>{% endif %}
 <script src="{{ url_for('static', filename='js/recurring.js') }}"></script>
 <script src="{{ url_for('static', filename='js/main.js') }}"></script>
-</body>
-</html>
+{% endblock %}

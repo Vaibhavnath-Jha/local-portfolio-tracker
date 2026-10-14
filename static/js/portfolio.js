@@ -1,18 +1,23 @@
 // Loading, rendering and refreshing the portfolio summary
 
+const _fxRates = {};
+
 async function setCurrency(c) {
-  if (c === 'USD') {
+  if (c !== PAGE.currency && !_fxRates[c]) {
     try {
-      const data = await api('/api/exchange-rate');
-      usdRate = data.usd_inr;
+      _fxRates[c] = (await api('/api/exchange-rate?to=' + c)).rate;
     } catch (e) {
-      alert('Could not fetch the USD exchange rate: ' + e.message);
-      document.querySelector(`input[name="currency"][value="${currency}"]`).checked = true;
+      alert('Could not fetch the ' + c + ' exchange rate: ' + e.message);
+      showCurrency();
       return;
     }
   }
   currency = c;
+  fxRate = c === PAGE.currency ? 1 : _fxRates[c];
+  saveCurrency(c);
+  showCurrency();
   renderPortfolio();
+  if (histDataCache) renderLineChart(filterByTimeRange(histDataCache));
 }
 
 async function loadPortfolio() {

@@ -45,7 +45,7 @@ function renderPieChart(investments, isHistorical) {
     if (!val || val <= 0) continue;
     keys.push(key);
     labels.push(labelMap[key] || key);
-    data.push(currency === 'USD' ? val / usdRate : val);
+    data.push(toDisplay(val));
     colors.push(colorMap[key] || '#666');
   }
 
@@ -72,10 +72,9 @@ function renderPieChart(investments, isHistorical) {
         tooltip: {
           callbacks: {
             label: function(ctx) {
-              const sym = currency === 'INR' ? '\u20B9' : '$';
               const total = ctx.dataset.data.reduce((a,b) => a+b, 0);
               const pct = ((ctx.parsed / total) * 100).toFixed(1);
-              return ctx.label + ': ' + sym + ctx.parsed.toLocaleString('en-IN', {maximumFractionDigits:0}) + ' (' + pct + '%)';
+              return ctx.label + ': ' + fmtAmount(ctx.parsed) + ' (' + pct + '%)';
             }
           }
         }

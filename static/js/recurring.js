@@ -18,11 +18,9 @@ function renderScheduleList() {
 
   for (var inv of scheduled) {
     var s = inv.schedule;
-    var sym = currency === 'INR' ? '\u20B9' : '$';
-    var amt = currency === 'USD' ? (parseFloat(s.amount) / usdRate) : parseFloat(s.amount);
     html += '<tr>' +
       '<td style="padding:4px 8px;">' + esc(inv.name) + '</td>' +
-      '<td style="padding:4px 8px;">' + sym + amt.toLocaleString('en-IN', {maximumFractionDigits:0}) + '/mo</td>' +
+      '<td style="padding:4px 8px;">' + fmt(s.amount) + '/mo</td>' +
       '<td style="padding:4px 8px;">' + esc(s.day) + '</td>' +
       '<td style="padding:4px 8px;">' + esc(s.start_date) + '</td>' +
       '<td style="padding:4px 8px;">' + esc(s.end_date || 'Ongoing') + '</td>' +

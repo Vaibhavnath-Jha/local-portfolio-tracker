@@ -2,7 +2,7 @@
 
 A local, self-hosted portfolio tracker for Indian investors that don't want online portfolio trackers to sell their financial data.
 
-Track stocks, mutual funds, commodities, crypto, Provident Fund contributions, and Fixed Deposits — all in one place with live prices and historical charts.
+Track stocks, mutual funds, commodities, crypto, Provident Fund contributions, and Fixed Deposits — all in one place with live prices and historical charts. A second portfolio tracks German and global funds and ETFs in EUR, and a combined view adds both up.
 
 ![Python](https://img.shields.io/badge/Python-3.9+-blue) ![Flask](https://img.shields.io/badge/Flask-Backend-green)
 
@@ -16,6 +16,12 @@ Track stocks, mutual funds, commodities, crypto, Provident Fund contributions, a
 - **Provident Fund** — Monthly contribution tracking with configurable interest rate and annual compounding
 - **Fixed Deposits** — Principal, rate, tenor with monthly/quarterly/half-yearly/yearly compounding options
 
+### Regions
+The header switches between three views:
+- **India** — the original portfolio, valued in INR
+- **Germany** — German and global investments, valued in EUR: stocks, ETFs and funds on any exchange (searched by name, ticker or ISIN via Yahoo Finance, e.g. `VWCE.DE` or `0P0000….F`), Gold ETCs, crypto and Festgeld. Listings quoted in another currency (USD, GBp, ...) are converted to EUR automatically. Enter buy prices in EUR. The history chart benchmarks against MSCI World (iShares Core MSCI World, `EUNL.DE`) and adjusts for German CPI
+- **Combined** — net worth across both portfolios: summary cards, a split by region, a stacked history chart and a per-region table. Every amount is converted at the exchange rate of its own date, so gains and XIRR include currency moves
+
 ### Portfolio Dashboard
 - Total portfolio value, total invested, gain/loss summary, and **XIRR** (annualized return accounting for irregular cash flows)
 - Allocation breakdown with two views:
@@ -25,18 +31,18 @@ Track stocks, mutual funds, commodities, crypto, Provident Fund contributions, a
 - Filter investments by **Current / Past / All** and by **asset class** (Equity, Debt, Commodities, Crypto)
 - **Per-investment XIRR** column and a **totals row** that updates based on active filters
 - Manual price refresh
-- INR default with USD conversion toggle
+- Show amounts in INR, EUR or USD on any page (converted at today's rate); the choice is remembered across pages
 
 ### Historical Charts
 - **Portfolio Value** — Two-line chart showing portfolio value vs amount invested over time, making profit/loss visible at a glance
 - **Returns %** — Percentage return over time with a 0% baseline
 - **Current Holdings** — What your current holdings would have been worth historically (backwards projection)
-- **Nifty 50 benchmark** toggle — overlay Nifty 50 performance on any chart view to compare against the index
+- **Benchmark** toggle — overlay Nifty 50 (India) or MSCI World (Germany) performance to compare against the index
 - **Amount Invested** toggle — optionally show/hide the invested amount line
-- **Inflation adjustment** toggle using World Bank India CPI data (with monthly interpolation and extrapolation for recent years)
+- **Inflation adjustment** toggle using World Bank CPI data for India or Germany (with monthly interpolation and extrapolation for recent years)
 - **Time range filters** — 1M, 3M, 6M, 1Y, 3Y, 5Y, and MAX to zoom into any period (defaults to MAX)
 
-### Import
+### Import (India)
 - **Zerodha Tradebook** — Import CSV files (both EQ and MF segments)
   - Auto-classifies stocks vs ETFs vs gold ETFs
   - Resolves mutual fund ISINs via AMFI data
@@ -64,15 +70,14 @@ Track stocks, mutual funds, commodities, crypto, Provident Fund contributions, a
 
 ## Tech Stack
 
-- **Backend:** Python Flask with JSON file storage (`data/portfolio.json`)
+- **Backend:** Python Flask with JSON file storage (one file per user and region)
 - **Frontend:** Single-page HTML with vanilla JS, Chart.js, and Flatpickr
 - **APIs:**
-  - Yahoo Finance v8 (stocks/ETFs — fetched via `curl` to avoid TLS blocking)
+  - Yahoo Finance v8 (stocks/ETFs, German and global funds, exchange rates — fetched via `curl` to avoid TLS blocking)
   - [mfapi.in](https://www.mfapi.in/) (mutual fund NAV and history)
   - [AMFI India](https://www.amfiindia.com/) (ISIN to scheme code mapping)
   - [CoinGecko](https://www.coingecko.com/en/api) (crypto prices, free tier — 365-day history limit)
-  - [World Bank](https://data.worldbank.org/) (India CPI for inflation adjustment)
-  - [ExchangeRate API](https://open.er-api.com/) (INR/USD conversion)
+  - [World Bank](https://data.worldbank.org/) (India and Germany CPI for inflation adjustment)
 
 ## Setup
 
@@ -141,10 +146,11 @@ Optional environment variables:
 
 ## Data Storage
 
-All data is stored locally in `data/`: each account's portfolio in `data/users/<username>/portfolio.json`, and accounts (with hashed passwords) in `data/users.json`. No data is sent to any server — API calls are only made to fetch live/historical prices.
+All data is stored locally in `data/`: each account's India portfolio in `data/users/<username>/portfolio.json` and its Germany portfolio in `data/users/<username>/portfolio_de.json`, and accounts (with hashed passwords) in `data/users.json`. No data is sent to any server — API calls are only made to fetch live/historical prices.
 
 ## Future Plans
 
 - **Asset rebalancing suggestions** — Target allocation vs actual allocation with rebalance recommendations. Expected CAGR/YoY returns based on current asset split.
 - **Export** — Download portfolio data as CSV/Excel
-- **More Investments** - Real estate, US investments (most probably in a separate sheet/tab)
+- **More Investments** - Real estate
+- **Import for German brokers** (Trade Republic, Scalable Capital, comdirect)

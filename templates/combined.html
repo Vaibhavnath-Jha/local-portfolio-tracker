@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block title %}Portfolio Tracker · Combined{% endblock %}
+
+{% block actions %}
+      <button class="btn" onclick="refreshPrices()" id="refreshBtn">Refresh Prices</button>
+{% endblock %}
+
+{% block content %}
+  <div class="summary-cards">
+    <div class="card"><div class="card-label">Net Worth</div><div class="card-value" id="totalValue">--</div></div>
+    <div class="card"><div class="card-label">Total Invested</div><div class="card-value" id="totalInvested">--</div></div>
+    <div class="card"><div class="card-label">Total Gain/Loss</div><div class="card-value" id="totalGainLoss">--</div><div class="card-sub" id="totalGainLossPct"></div></div>
+    <div class="card"><div class="card-label">XIRR</div><div class="card-value" id="xirrValue">--</div><div class="card-sub" style="color:var(--muted);">annualized</div></div>
+  </div>
+
+  <div class="charts-grid">
+    <div class="chart-card" style="position:relative;">
+      <h3>Split by Region</h3>
+      <canvas id="pieChart"></canvas>
+      <div class="loading-overlay" id="summaryLoading"><div class="spinner"></div></div>
+    </div>
+    <div class="chart-card" style="position:relative;">
+      <h3>Combined History</h3>
+      <div class="chart-controls">
+        <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;color:var(--muted);">
+          <input type="checkbox" id="investedToggle" checked onchange="renderCombinedHistory()"> Amount Invested
+        </label>
+      </div>
+      <canvas id="lineChart"></canvas>
+      <div style="display:flex;justify-content:flex-end;margin-top:8px;">
+        <div class="toggle-group" id="timeRangeGroup">
+          <button class="toggle-btn" onclick="setTimeRange('1M', this)">1M</button>
+          <button class="toggle-btn" onclick="setTimeRange('3M', this)">3M</button>
+          <button class="toggle-btn" onclick="setTimeRange('6M', this)">6M</button>
+          <button class="toggle-btn" onclick="setTimeRange('1Y', this)">1Y</button>
+          <button class="toggle-btn" onclick="setTimeRange('3Y', this)">3Y</button>
+          <button class="toggle-btn" onclick="setTimeRange('5Y', this)">5Y</button>
+          <button class="toggle-btn active" onclick="setTimeRange('MAX', this)">MAX</button>
+        </div>
+      </div>
+      <div class="loading-overlay" id="histLoading"><div class="spinner"></div></div>
+    </div>
+  </div>
+
+  <div class="investments-section">
+    <h2>Regions</h2>
+    <div class="card" style="overflow-x:auto;">
+      <table class="inv-table">
+        <thead>
+          <tr>
+            <th>Region</th><th>Investments</th><th>Invested</th><th>Current Value</th>
+            <th>Gain/Loss</th><th>XIRR</th><th style="text-align:right;">Share</th>
+          </tr>
+        </thead>
+        <tbody id="regionBody"></tbody>
+      </table>
+    </div>
+    <p style="font-size:0.8rem;color:var(--muted);margin-top:8px;">
+      Every amount is converted at the exchange rate of its own date, so gains include currency moves.
+    </p>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/core.js') }}"></script>
+<script src="{{ url_for('static', filename='js/combined.js') }}"></script>
+{% endblock %}

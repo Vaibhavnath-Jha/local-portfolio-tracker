@@ -17,9 +17,10 @@ function onTypeChange() {
   document.getElementById('fdFields').style.display = t === 'fd' ? 'block' : 'none';
 
   const sl = document.getElementById('searchLabel');
-  if (t === 'mutual_fund') sl.textContent = 'Search Mutual Fund';
-  else if (t === 'crypto') sl.textContent = 'Search Cryptocurrency';
-  else sl.textContent = 'Search Ticker (e.g. RELIANCE, NIFTYBEES)';
+  if (t === 'crypto') sl.textContent = 'Search Cryptocurrency';
+  else if (!PAGE.yahooTypes.includes(t)) sl.textContent = 'Search Mutual Fund';
+  else if (PAGE.region === 'in') sl.textContent = 'Search Ticker (e.g. RELIANCE, NIFTYBEES)';
+  else sl.textContent = 'Search by name, ticker or ISIN (e.g. VWCE, IE00B4L5Y983)';
 
   document.getElementById('searchResults').style.display = 'none';
   document.getElementById('searchInput').value = '';
@@ -37,10 +38,8 @@ async function doSearch() {
   const t = document.getElementById('invType').value;
   if (q.length < 2) { document.getElementById('searchResults').style.display = 'none'; return; }
 
-  let url;
-  if (t === 'mutual_fund') url = `/api/search/mf?q=${encodeURIComponent(q)}`;
-  else if (t === 'crypto') url = `/api/search/crypto?q=${encodeURIComponent(q)}`;
-  else url = `/api/search/stock?q=${encodeURIComponent(q)}`;
+  const searchKind = t === 'crypto' ? 'crypto' : PAGE.yahooTypes.includes(t) ? 'stock' : 'mf';
+  const url = `/api/search/${searchKind}?q=${encodeURIComponent(q)}`;
 
   try {
     const results = await api(url);
@@ -53,12 +52,12 @@ async function doSearch() {
     }
 
     let html = '';
-    if (t === 'mutual_fund') {
+    if (searchKind === 'mf') {
       for (const r of results) {
         html += `<div onclick="selectMF(${jsArg(r.schemeCode)}, ${jsArg(r.schemeName)})">
           ${esc(r.schemeName)} <small>(${esc(r.schemeCode)})</small></div>`;
       }
-    } else if (t === 'crypto') {
+    } else if (searchKind === 'crypto') {
       for (const r of results) {
         html += `<div onclick="selectCrypto(${jsArg(r.id)}, ${jsArg(r.name)})">
           ${esc(r.name)} <small>(${esc(String(r.symbol || '').toUpperCase())})</small></div>`;
@@ -99,25 +98,18 @@ async function submitInvestment() {
   const t = document.getElementById('invType').value;
   let body = { type: t, category: t };
 
-  if (['stock', 'etf', 'gold_etf'].includes(t)) {
+  if (['stock', 'etf', 'gold_etf', 'mutual_fund', 'crypto'].includes(t)) {
+    const picked = document.getElementById('assetTicker').value;
+    if (t === 'crypto') {
+      body.coin_id = picked;
+    } else if (PAGE.yahooTypes.includes(t)) {
+      // A typed ticker without an exchange suffix defaults to the region's main exchange (NSE, Xetra)
+      const typed = document.getElementById('searchInput').value.trim().toUpperCase();
+      body.ticker = picked || (!typed || /[.^=]/.test(typed) ? typed : typed + PAGE.tickerSuffix);
+    } else {
+      body.scheme_code = picked;
+    }
     body.name = document.getElementById('assetName').value;
-    body.ticker = document.getElementById('assetTicker').value || document.getElementById('searchInput').value.toUpperCase() + '.NS';
-    body.transaction = {
-      date: document.getElementById('txnDate').value,
-      quantity: document.getElementById('txnQty').value,
-      buy_price: document.getElementById('txnPrice').value
-    };
-  } else if (t === 'mutual_fund') {
-    body.name = document.getElementById('assetName').value;
-    body.scheme_code = document.getElementById('assetTicker').value;
-    body.transaction = {
-      date: document.getElementById('txnDate').value,
-      quantity: document.getElementById('txnQty').value,
-      buy_price: document.getElementById('txnPrice').value
-    };
-  } else if (t === 'crypto') {
-    body.name = document.getElementById('assetName').value;
-    body.coin_id = document.getElementById('assetTicker').value;
     body.transaction = {
       date: document.getElementById('txnDate').value,
       quantity: document.getElementById('txnQty').value,
@@ -291,7 +283,7 @@ function onEditInvTypeChange() {
   ['editInvStockFields','editInvMfFields','editInvCryptoFields','editInvPfFields','editInvFdFields'].forEach(function(id) {
     document.getElementById(id).style.display = 'none';
   });
-  if (['stock','etf','gold_etf'].includes(t)) {
+  if (PAGE.yahooTypes.includes(t)) {
     document.getElementById('editInvStockFields').style.display = 'block';
   } else if (t === 'mutual_fund') {
     document.getElementById('editInvMfFields').style.display = 'block';
@@ -313,7 +305,7 @@ async function submitEditInvestment() {
   var invType = document.getElementById('editInvType').value;
   var body = { name: document.getElementById('editInvName').value, type: invType, category: invType };
 
-  if (['stock','etf','gold_etf'].includes(invType)) {
+  if (PAGE.yahooTypes.includes(invType)) {
     body.ticker = document.getElementById('editInvTicker').value;
   } else if (invType === 'mutual_fund') {
     body.scheme_code = document.getElementById('editInvSchemeCode').value;

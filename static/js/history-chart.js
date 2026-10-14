@@ -15,21 +15,6 @@ async function loadHistorical() {
   loading.style.display = 'none';
 }
 
-function filterByTimeRange(data) {
-  if (!data || !data.dates || data.dates.length === 0 || histTimeRange === 'MAX') return data;
-  const now = new Date();
-  const rangeMap = { '1M': 1, '3M': 3, '6M': 6, '1Y': 12, '3Y': 36, '5Y': 60 };
-  const months = rangeMap[histTimeRange];
-  const cutoff = new Date(now.getFullYear(), now.getMonth() - months, now.getDate());
-  const startIdx = data.dates.findIndex(d => new Date(d) >= cutoff);
-  if (startIdx <= 0) return data;
-  const filtered = { dates: data.dates.slice(startIdx) };
-  if (data.values) filtered.values = data.values.slice(startIdx);
-  if (data.invested) filtered.invested = data.invested.slice(startIdx);
-  if (data.benchmark) filtered.benchmark = data.benchmark.slice(startIdx);
-  return filtered;
-}
-
 function setTimeRange(range, btn) {
   histTimeRange = range;
   btn.parentElement.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
@@ -44,11 +29,11 @@ function renderLineChart(data) {
   if (lineChart) lineChart.destroy();
   if (!data.dates || data.dates.length === 0) return;
 
-  const convert = v => currency === 'USD' ? v / usdRate : v;
+  const convert = toDisplay;
   const showInvested = document.getElementById('investedToggle').checked;
   const hasBenchmark = data.benchmark && data.benchmark.some(v => v !== null);
 
-  // Benchmark = "what if all invested money went into Nifty 50 instead"
+  // Benchmark = "what if all invested money went into the index (Nifty 50, MSCI World) instead"
   // Backend returns simulated portfolio value, so we can use it directly or derive returns
   function benchmarkReturnDataset() {
     if (!hasBenchmark) return null;
@@ -58,7 +43,7 @@ function renderLineChart(data) {
       return ((v - inv) / inv) * 100;
     });
     return {
-      label: 'Nifty 50',
+      label: PAGE.benchmarkLabel,
       data: returns,
       borderColor: '#ef4444',
       backgroundColor: 'transparent',
@@ -75,7 +60,7 @@ function renderLineChart(data) {
     if (!hasBenchmark) return null;
     const values = data.benchmark.map(v => v !== null ? convert(v) : null);
     return {
-      label: 'Nifty 50',
+      label: PAGE.benchmarkLabel,
       data: values,
       borderColor: '#ef4444',
       backgroundColor: 'transparent',
@@ -165,7 +150,7 @@ function renderLineChart(data) {
           y: {
             ticks: {
               color: '#9ca3af', font: { size: 10 },
-              callback: v => { const sym = currency === 'INR' ? '\u20B9' : '$'; return sym + (v >= 100000 ? (v/100000).toFixed(1)+'L' : v.toLocaleString()); }
+              callback: fmtAxis
             },
             grid: { color: '#2e3348' }
           }
@@ -174,10 +159,7 @@ function renderLineChart(data) {
           legend: { display: hasMultiple, labels: { color: '#d1d5db', usePointStyle: true, pointStyle: 'line', font: { size: 11 } } },
           tooltip: {
             callbacks: {
-              label: ctx => {
-                const sym = currency === 'INR' ? '\u20B9' : '$';
-                return ctx.dataset.label + ': ' + sym + ctx.parsed.y.toLocaleString('en-IN', { maximumFractionDigits: 0 });
-              }
+              label: ctx => ctx.dataset.label + ': ' + fmtAmount(ctx.parsed.y)
             }
           }
         }
@@ -225,7 +207,7 @@ function renderLineChart(data) {
           y: {
             ticks: {
               color: '#9ca3af', font: { size: 10 },
-              callback: v => { const sym = currency === 'INR' ? '\u20B9' : '$'; return sym + (v >= 100000 ? (v/100000).toFixed(1)+'L' : v.toLocaleString()); }
+              callback: fmtAxis
             },
             grid: { color: '#2e3348' }
           }
@@ -234,10 +216,7 @@ function renderLineChart(data) {
           legend: { display: hasMultiple, labels: { color: '#d1d5db', usePointStyle: true, pointStyle: 'line', font: { size: 11 } } },
           tooltip: {
             callbacks: {
-              label: ctx => {
-                const sym = currency === 'INR' ? '\u20B9' : '$';
-                return ctx.dataset.label + ': ' + sym + ctx.parsed.y.toLocaleString('en-IN', { maximumFractionDigits: 0 });
-              }
+              label: ctx => ctx.dataset.label + ': ' + fmtAmount(ctx.parsed.y)
             }
           }
         }
