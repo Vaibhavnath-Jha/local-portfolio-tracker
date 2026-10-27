@@ -2,7 +2,7 @@
 
 A local, self-hosted portfolio tracker for Indian investors that don't want online portfolio trackers to sell their financial data.
 
-Track stocks, mutual funds, commodities, crypto, Provident Fund contributions, and Fixed Deposits — all in one place with live prices and historical charts. A second portfolio tracks German and global funds and ETFs in EUR, and a combined view adds both up.
+Track stocks, mutual funds, commodities, crypto, Provident Fund contributions, and Fixed Deposits — all in one place with live prices and historical charts. A second portfolio tracks German and global funds and ETFs in EUR, and an overview page summarises both.
 
 ![Python](https://img.shields.io/badge/Python-3.9+-blue) ![Flask](https://img.shields.io/badge/Flask-Backend-green)
 
@@ -17,10 +17,9 @@ Track stocks, mutual funds, commodities, crypto, Provident Fund contributions, a
 - **Fixed Deposits** — Principal, rate, tenor with monthly/quarterly/half-yearly/yearly compounding options
 
 ### Regions
-The header switches between three views:
-- **India** — the original portfolio, valued in INR
-- **Germany** — German and global investments, valued in EUR: stocks, ETFs and funds on any exchange (searched by name, ticker or ISIN via Yahoo Finance, e.g. `VWCE.DE` or `0P0000….F`), Gold ETCs, crypto and Festgeld. Listings quoted in another currency (USD, GBp, ...) are converted to EUR automatically. Enter buy prices in EUR. The history chart benchmarks against MSCI World (iShares Core MSCI World, `EUNL.DE`) and adjusts for German CPI
-- **Combined** — net worth across both portfolios: summary cards, a split by region, a stacked history chart and a per-region table. Every amount is converted at the exchange rate of its own date, so gains and XIRR include currency moves
+The home page (`/`) is an **overview**: one card per portfolio with its total value, amount invested, gain/loss, XIRR, allocation by asset class and top holdings, each in the portfolio's own currency. Click the title to get back to it. The header tabs open each portfolio's detailed view:
+- **India** (`/in`) — the original portfolio, valued in INR
+- **Germany** (`/de`) — German and global investments, valued in EUR: stocks, ETFs and funds on any exchange (searched by name, ticker or ISIN via Yahoo Finance, e.g. `VWCE.DE` or `0P0000….F`), Gold ETCs, crypto and Festgeld. Listings quoted in another currency (USD, GBp, ...) are converted to EUR automatically. Enter buy prices in EUR. The history chart benchmarks against MSCI World (iShares Core MSCI World, `EUNL.DE`) and adjusts for German CPI
 
 ### Portfolio Dashboard
 - Total portfolio value, total invested, gain/loss summary, and **XIRR** (annualized return accounting for irregular cash flows)
@@ -31,7 +30,6 @@ The header switches between three views:
 - Filter investments by **Current / Past / All** and by **asset class** (Equity, Debt, Commodities, Crypto)
 - **Per-investment XIRR** column and a **totals row** that updates based on active filters
 - Manual price refresh
-- Show amounts in INR, EUR or USD on any page (converted at today's rate); the choice is remembered across pages
 
 ### Historical Charts
 - **Portfolio Value** — Two-line chart showing portfolio value vs amount invested over time, making profit/loss visible at a glance

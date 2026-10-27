@@ -38,13 +38,13 @@ IDENTIFIER_FIELDS = {
     "crypto": ("coin_id", "Coin ID"),
 }
 COMPOUNDING_PERIODS = {"monthly": 12, "quarterly": 4, "half_yearly": 2, "yearly": 1}
-CURRENCY_SYMBOLS = {"INR": "₹", "EUR": "€", "USD": "$"}
+CURRENCY_SYMBOLS = {"INR": "₹", "EUR": "€"}
 
 # Each region is a separate portfolio, valued in its own currency
 REGIONS = {
     "in": {
         "name": "India",
-        "endpoint": "index",
+        "endpoint": "india",
         "currency": "INR",
         "file": "portfolio.json",
         "types": {
@@ -837,7 +837,6 @@ def calculate_xirr(cash_flows):
 
 
 def render_page(template, page, **page_config):
-    page_config.setdefault("currency", "EUR")
     return render_template(
         template,
         username=session["user"],
@@ -863,19 +862,21 @@ def render_region_page(region):
 
 @app.route("/")
 def index():
+    """Overview: a quick summary of every region, each in its own currency."""
+    return render_page("overview.html", "overview",
+                       regions=[{"id": r, "name": cfg["name"], "currency": cfg["currency"],
+                                 "url": url_for(cfg["endpoint"])}
+                                for r, cfg in REGIONS.items()])
+
+
+@app.route("/in")
+def india():
     return render_region_page("in")
 
 
 @app.route("/de")
 def germany():
     return render_region_page("de")
-
-
-@app.route("/combined")
-def combined_page():
-    return render_page("combined.html", "combined",
-                       regions=[{"id": r, "name": cfg["name"], "url": url_for(cfg["endpoint"])}
-                                for r, cfg in REGIONS.items()])
 
 
 @app.route("/api/portfolio")
@@ -1233,19 +1234,6 @@ def refresh_prices():
     return jsonify({"status": "ok"})
 
 
-@app.route("/api/exchange-rate")
-def exchange_rate():
-    """Today's rate from the region's currency into ?to=."""
-    base = REGIONS[request_region()]["currency"]
-    to = request.args.get("to", "")
-    if to not in CURRENCY_SYMBOLS:
-        raise ValidationError("Unknown currency '{}'".format(to))
-    rate = fx_rate(base, to)
-    if rate is None:
-        raise UpstreamError("Could not fetch the {} to {} exchange rate".format(base, to))
-    return jsonify({"rate": rate})
-
-
 def investment_dates(investments):
     """Every date money went into (or out of) these investments."""
     dates = []
@@ -1282,11 +1270,8 @@ def historical():
     ))
 
 
-def portfolio_history(region, view="value", use_inflation=False, use_benchmark=False, start_date=None, fx=None):
-    """Weekly portfolio value and amount invested for a region.
-
-    start_date starts the series earlier than the first investment (so regions can share one timeline).
-    fx(date_str) converts the region's currency into another one as of that date."""
+def portfolio_history(region, view="value", use_inflation=False, use_benchmark=False):
+    """Weekly portfolio value and amount invested for a region."""
     portfolio = load_portfolio(region)
     investments = valid_investments(portfolio, region)
     all_dates = investment_dates(investments)
@@ -1295,7 +1280,7 @@ def portfolio_history(region, view="value", use_inflation=False, use_benchmark=F
         return {"dates": [], "values": [], "invested": []}
 
     now = datetime.now()
-    start_date = min(all_dates + ([start_date] if start_date else []))
+    start_date = min(all_dates)
     end_date = now.strftime("%Y-%m-%d")
 
     # Fetch historical prices for all market investments
@@ -1308,18 +1293,12 @@ def portfolio_history(region, view="value", use_inflation=False, use_benchmark=F
 
     # Inflation adjustment expresses everything in today's money: each point's value is scaled by
     # its own date's factor, and each contribution by the factor of the date it was invested.
-    # Currency conversion works the same way, with that date's exchange rate.
     def adj(date_str):
         return 1.0
     if use_inflation:
         cpi_data = get_inflation_data(region)
         if cpi_data:
             adj = make_inflation_adjuster(cpi_data, now)
-    if fx:
-        inflation_adj = adj
-
-        def adj(date_str):
-            return inflation_adj(date_str) * fx(date_str)
 
     values = []
     invested_values = []
@@ -1511,90 +1490,6 @@ def historical_allocation():
         allocations[cat] = [round(alloc_per_date[i].get(cat, 0), 2) for i in range(len(date_points))]
 
     return jsonify({"dates": date_points, "allocations": allocations})
-
-
-# --- Combined view across regions ---
-# Every amount is converted at the exchange rate of its own date, so the totals include currency gains/losses.
-
-def display_currency():
-    currency = request.args.get("currency", "EUR")
-    if currency not in CURRENCY_SYMBOLS:
-        raise ValidationError("Unknown currency '{}'".format(currency))
-    return currency
-
-
-def _gain_pct(value, invested):
-    return round((value - invested) / invested * 100, 2) if invested else 0
-
-
-@app.route("/api/combined")
-def combined():
-    currency = display_currency()
-    today = datetime.now().strftime("%Y-%m-%d")
-    summaries = {region: portfolio_summary(region) for region in REGIONS}
-    start = min((d for _, contributions in summaries.values() for d, _ in contributions), default=today)
-
-    regions = []
-    all_flows = []
-    for region, cfg in REGIONS.items():
-        summary, contributions = summaries[region]
-        fx = make_fx_converter(cfg["currency"], currency, start)
-        value = summary["total_value"] * fx(today)
-        invested = sum(amount * fx(d) for d, amount in contributions)
-        flows = [(d, -amount * fx(d)) for d, amount in contributions]
-        all_flows.extend(flows)
-        if value > 0:
-            flows.append((today, value))
-        regions.append({
-            "id": region,
-            "name": cfg["name"],
-            "currency": cfg["currency"],
-            "count": len(summary["investments"]),
-            "value": round(value, 2),
-            "invested": round(invested, 2),
-            "gain_loss": round(value - invested, 2),
-            "gain_loss_pct": _gain_pct(value, invested),
-            "xirr": calculate_xirr(flows) if len(flows) >= 2 else None,
-        })
-
-    total_value = sum(r["value"] for r in regions)
-    total_invested = sum(r["invested"] for r in regions)
-    if total_value > 0:
-        all_flows.append((today, total_value))
-    return jsonify({
-        "currency": currency,
-        "regions": regions,
-        "total_value": round(total_value, 2),
-        "total_invested": round(total_invested, 2),
-        "total_gain_loss": round(total_value - total_invested, 2),
-        "total_gain_loss_pct": _gain_pct(total_value, total_invested),
-        "xirr": calculate_xirr(all_flows) if len(all_flows) >= 2 else None,
-    })
-
-
-@app.route("/api/combined/history")
-def combined_history():
-    """Weekly value of each region on one shared timeline, plus the combined amount invested."""
-    currency = display_currency()
-    all_dates = []
-    for region in REGIONS:
-        all_dates.extend(investment_dates(valid_investments(load_portfolio(region), region)))
-    if not all_dates:
-        return jsonify({"dates": [], "invested": [], "regions": {}})
-
-    start = min(all_dates)
-    dates = weekly_dates(start, datetime.now().strftime("%Y-%m-%d"))
-    invested = [0.0] * len(dates)
-    series = {}
-    for region, cfg in REGIONS.items():
-        fx = make_fx_converter(cfg["currency"], currency, start)
-        history = portfolio_history(region, start_date=start, fx=fx)
-        # A region with no investments comes back empty; otherwise it shares the same weekly dates
-        by_date = dict(zip(history["dates"], zip(history["values"], history["invested"])))
-        series[region] = [by_date.get(d, (0, 0))[0] for d in dates]
-        invested = [total + by_date.get(d, (0, 0))[1] for total, d in zip(invested, dates)]
-
-    return jsonify({"dates": dates, "invested": [round(v, 2) for v in invested], "regions": series})
 
 
 @app.route("/api/search/stock")

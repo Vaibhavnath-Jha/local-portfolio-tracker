@@ -1,12 +1,11 @@
 // Shared state, constants, formatting and API helpers
 
-// Set by the page template: the region's config, or just a default currency on the combined page
+// Set by the page template: the region's config, or the list of regions on the overview
 const PAGE = window.PAGE;
 
 let portfolioData = null;
-// Display currency, and the rate converting the page's own currency into it
-let currency = PAGE.currency;
-let fxRate = 1;
+// Amounts are always shown in the page's own currency (INR for India, EUR for Germany)
+const currency = PAGE.currency;
 let pieChart = null;
 let lineChart = null;
 let histView = 'value';
@@ -77,20 +76,15 @@ function toNumber(val) {
   return isFinite(n) ? n : 0;
 }
 
-const CURRENCY_SYMBOLS = { INR: '\u20B9', EUR: '\u20AC', USD: '$' };
+const CURRENCY_SYMBOLS = { INR: '\u20B9', EUR: '\u20AC' };
 
-// Convert an amount in the page's currency into the display currency
-function toDisplay(val) {
-  return toNumber(val) * fxRate;
+// Format an amount in the given currency (the page's own by default)
+function fmtAmount(val, digits = 0, cur = currency) {
+  const locale = cur === 'INR' ? 'en-IN' : 'en-US';
+  return CURRENCY_SYMBOLS[cur] + toNumber(val).toLocaleString(locale, { maximumFractionDigits: digits });
 }
 
-// Format an amount that is already in the display currency
-function fmtAmount(val, digits = 0) {
-  const locale = currency === 'INR' ? 'en-IN' : 'en-US';
-  return CURRENCY_SYMBOLS[currency] + toNumber(val).toLocaleString(locale, { maximumFractionDigits: digits });
-}
-
-// Compact chart-axis label for an amount in the display currency (lakhs for INR, k/M otherwise)
+// Compact chart-axis label (lakhs for INR, k/M otherwise)
 function fmtAxis(v) {
   const sym = CURRENCY_SYMBOLS[currency];
   if (currency === 'INR') return sym + (v >= 100000 ? (v / 100000).toFixed(1) + 'L' : v.toLocaleString('en-IN'));
@@ -100,28 +94,11 @@ function fmtAxis(v) {
 }
 
 function fmt(val) {
-  return fmtAmount(toDisplay(val), 0);
+  return fmtAmount(val, 0);
 }
 
 function fmtDetailed(val) {
-  return fmtAmount(toDisplay(val), 2);
-}
-
-// The display currency is shared by all pages
-function savedCurrency() {
-  try {
-    const c = localStorage.getItem('displayCurrency');
-    return CURRENCY_SYMBOLS[c] ? c : null;
-  } catch (e) { return null; }
-}
-
-function saveCurrency(c) {
-  try { localStorage.setItem('displayCurrency', c); } catch (e) { /* storage blocked */ }
-}
-
-function showCurrency() {
-  const radio = document.querySelector(`input[name="currency"][value="${currency}"]`);
-  if (radio) radio.checked = true;
+  return fmtAmount(val, 2);
 }
 
 // Keep only the points in the selected time range (every array in data runs parallel to data.dates)

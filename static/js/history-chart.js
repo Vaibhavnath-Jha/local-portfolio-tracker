@@ -29,7 +29,6 @@ function renderLineChart(data) {
   if (lineChart) lineChart.destroy();
   if (!data.dates || data.dates.length === 0) return;
 
-  const convert = toDisplay;
   const showInvested = document.getElementById('investedToggle').checked;
   const hasBenchmark = data.benchmark && data.benchmark.some(v => v !== null);
 
@@ -58,10 +57,9 @@ function renderLineChart(data) {
 
   function benchmarkValueDataset() {
     if (!hasBenchmark) return null;
-    const values = data.benchmark.map(v => v !== null ? convert(v) : null);
     return {
       label: PAGE.benchmarkLabel,
-      data: values,
+      data: data.benchmark,
       borderColor: '#ef4444',
       backgroundColor: 'transparent',
       borderDash: [4, 4],
@@ -126,10 +124,9 @@ function renderLineChart(data) {
       }
     });
   } else if (histView === 'current') {
-    const values = data.values.map(convert);
     const datasets = [{
       label: 'Current Holdings Value',
-      data: values,
+      data: data.values,
       borderColor: '#3b82f6',
       backgroundColor: 'rgba(59,130,246,0.1)',
       fill: true,
@@ -167,11 +164,9 @@ function renderLineChart(data) {
     });
   } else {
     // Portfolio Value view
-    const values = data.values.map(convert);
-    const invested = data.invested.map(convert);
     const datasets = [{
       label: 'Portfolio Value',
-      data: values,
+      data: data.values,
       borderColor: '#3b82f6',
       backgroundColor: 'rgba(59,130,246,0.08)',
       fill: true,
@@ -182,7 +177,7 @@ function renderLineChart(data) {
     if (showInvested) {
       datasets.push({
         label: 'Amount Invested',
-        data: invested,
+        data: data.invested,
         borderColor: '#f59e0b',
         borderDash: [6, 3],
         backgroundColor: 'transparent',

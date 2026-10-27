@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block title %}Portfolio Tracker · Overview{% endblock %}
+
+{% block head %}
+<style>
+  .region-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 16px; }
+  .region-card { position: relative; min-width: 0; min-height: 260px;display: flex; flex-direction: column; gap: 18px; }
+  .region-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .region-head h2 { font-size: 1.1rem; }
+  .region-head h2 small { font-size: 0.75rem; color: var(--muted); font-weight: 400; margin-left: 6px; }
+  .region-head a { color: var(--blue); text-decoration: none; font-size: 0.85rem; white-space: nowrap; }
+  .region-head a:hover { text-decoration: underline; }
+  .region-value { font-size: 2rem; font-weight: 700; }
+  .region-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 12px; }
+  .region-stats .card-value { font-size: 1.05rem; }
+  .alloc-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--surface2); }
+  .alloc-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; font-size: 0.8rem; color: var(--muted); }
+  .alloc-legend span::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; background: var(--dot); }
+  .top-list { list-style: none; font-size: 0.85rem; }
+  .top-list li { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .top-list li:last-child { border-bottom: none; }
+  .top-list .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .top-list .amt { white-space: nowrap; }
+  .section-label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; margin-bottom: 6px; }
+</style>
+{% endblock %}
+
+{% block actions %}
+      <button class="btn" onclick="refreshPrices()" id="refreshBtn">Refresh Prices</button>
+{% endblock %}
+
+{% block content %}
+  <div class="region-grid">
+    {% for r in page_config.regions %}
+    <section class="card region-card" id="region-{{ r.id }}">
+      <div class="region-head">
+        <h2>{{ r.name }}<small>{{ r.currency }}</small></h2>
+        <a href="{{ r.url }}">View details &rarr;</a>
+      </div>
+      <div>
+        <div class="card-label">Total Value</div>
+        <div class="region-value" data-field="value">--</div>
+      </div>
+      <div class="region-stats">
+        <div><div class="card-label">Invested</div><div class="card-value" data-field="invested">--</div></div>
+        <div><div class="card-label">Gain/Loss</div><div class="card-value" data-field="gain">--</div><div class="card-sub" data-field="gainPct"></div></div>
+        <div><div class="card-label">XIRR</div><div class="card-value" data-field="xirr">--</div><div class="card-sub" style="color:var(--muted);">annualized</div></div>
+      </div>
+      <div data-field="alloc"></div>
+      <div data-field="top"></div>
+      <div class="loading-overlay"><div class="spinner"></div></div>
+    </section>
+    {% endfor %}
+  </div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/core.js') }}"></script>
+<script src="{{ url_for('static', filename='js/overview.js') }}"></script>
+{% endblock %}

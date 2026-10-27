@@ -27,5 +27,3 @@ document.querySelectorAll('.datepicker').forEach(function(el) {
 // Init
 loadPortfolio();
 loadHistorical();
-// Values arrive in the page's own currency; switch to the one picked last time once its rate is in
-if (savedCurrency() && savedCurrency() !== currency) setCurrency(savedCurrency());

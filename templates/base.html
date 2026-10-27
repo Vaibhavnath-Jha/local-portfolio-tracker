@@ -21,6 +21,7 @@
   .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
   header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; flex-wrap: wrap; gap: 12px; }
   header h1 { font-size: 1.5rem; font-weight: 700; }
+  header h1 a { color: inherit; text-decoration: none; }
   .header-actions { display: flex; gap: 8px; align-items: center; }
   .user-menu { display: flex; gap: 8px; align-items: center; margin-left: 8px; padding-left: 16px; border-left: 1px solid var(--border); font-size: 0.85rem; color: var(--muted); }
 
@@ -89,7 +90,6 @@
   .loading-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(15,17,23,0.7); display: flex; align-items: center; justify-content: center; border-radius: 12px; }
 
   .empty-state { text-align: center; padding: 40px; color: var(--muted); }
-  .currency-toggle { font-size: 0.85rem; color: var(--muted); }
 
   /* Flatpickr overrides to match theme */
   .flatpickr-calendar {
@@ -131,20 +131,14 @@
 <div class="container">
   <header>
     <div class="header-title">
-      <h1>Portfolio Tracker</h1>
+      <h1><a href="{{ url_for('index') }}" title="Overview">Portfolio Tracker</a></h1>
       <nav class="toggle-group" aria-label="Portfolio">
         {% for id, cfg in regions.items() %}
         <a class="toggle-btn{% if page == id %} active{% endif %}" href="{{ url_for(cfg.endpoint) }}">{{ cfg.name }}</a>
         {% endfor %}
-        <a class="toggle-btn{% if page == 'combined' %} active{% endif %}" href="{{ url_for('combined_page') }}">Combined</a>
       </nav>
     </div>
     <div class="header-actions">
-      <span class="currency-toggle">
-        {% for code in currencies %}
-        <label><input type="radio" name="currency" value="{{ code }}"{% if code == page_config.currency %} checked{% endif %} onchange="setCurrency('{{ code }}')"> {{ code }}</label>
-        {% endfor %}
-      </span>
       {% block actions %}{% endblock %}
       <form class="user-menu" method="post" action="{{ url_for('logout') }}">
         <span>{{ username }}</span>

@@ -45,7 +45,7 @@ function renderPieChart(investments, isHistorical) {
     if (!val || val <= 0) continue;
     keys.push(key);
     labels.push(labelMap[key] || key);
-    data.push(toDisplay(val));
+    data.push(val);
     colors.push(colorMap[key] || '#666');
   }
 

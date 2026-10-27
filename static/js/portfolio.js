@@ -1,25 +1,5 @@
 // Loading, rendering and refreshing the portfolio summary
 
-const _fxRates = {};
-
-async function setCurrency(c) {
-  if (c !== PAGE.currency && !_fxRates[c]) {
-    try {
-      _fxRates[c] = (await api('/api/exchange-rate?to=' + c)).rate;
-    } catch (e) {
-      alert('Could not fetch the ' + c + ' exchange rate: ' + e.message);
-      showCurrency();
-      return;
-    }
-  }
-  currency = c;
-  fxRate = c === PAGE.currency ? 1 : _fxRates[c];
-  saveCurrency(c);
-  showCurrency();
-  renderPortfolio();
-  if (histDataCache) renderLineChart(filterByTimeRange(histDataCache));
-}
-
 async function loadPortfolio() {
   try {
     portfolioData = await api('/api/portfolio');
